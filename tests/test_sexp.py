@@ -94,3 +94,49 @@ def test_decode_lazy_schema():
     lf = pl.LazyFrame({"s": ["(1 2)"]}).select(pl.col("s").sexp.decode(pl.List(pl.Int16)))
     assert lf.collect_schema()["s"] == pl.List(pl.Int16)
     assert lf.collect()["s"].to_list() == [[1, 2]]
+
+
+def test_decode_temporal():
+    from datetime import date, datetime, timedelta, timezone
+
+    dtype = pl.Struct(
+        {
+            "d": pl.Date,
+            "t": pl.Datetime("ms"),
+            "tz": pl.Datetime("us", "America/New_York"),
+            "dur": pl.Duration,
+        }
+    )
+    df = pl.DataFrame(
+        {
+            "s": [
+                '((d 2026-10-12) (t "2026-10-12 21:56:14.5") (tz "2026-10-12 12:00:00Z") (dur 1h30m))',
+                "((d 12/10/2026) (t 2026-10-12T21:56:14+02:00) (tz 2026-10-12T08:00) (dur 1.5s))",
+                "((d nope) (t nope) (tz nope) (dur 5x))",
+            ]
+        }
+    )
+    out = df.select(pl.col("s").sexp.decode(dtype))
+    assert out.schema["s"] == pl.Struct(
+        {
+            "d": pl.Date,
+            "t": pl.Datetime("ms"),
+            "tz": pl.Datetime("us", "America/New_York"),
+            "dur": pl.Duration("us"),
+        }
+    )
+    rows = out.unnest("s").with_columns(pl.col("tz").dt.convert_time_zone("UTC")).rows()
+    utc = timezone.utc
+    assert rows == [
+        (
+            date(2026, 10, 12),
+            datetime(2026, 10, 12, 21, 56, 14, 500000),
+            datetime(2026, 10, 12, 12, tzinfo=utc),
+            timedelta(hours=1, minutes=30),
+        ),
+        (None, datetime(2026, 10, 12, 19, 56, 14), datetime(2026, 10, 12, 12, tzinfo=utc), timedelta(seconds=1.5)),
+        (None, None, None, None),
+    ]
+
+    custom = pl.select(pl.lit("12/10/2026").sexp.decode(pl.Date, format="%d/%m/%Y")).item()
+    assert custom == date(2026, 10, 12)

@@ -1,6 +1,7 @@
 mod decode;
 mod expressions;
 pub mod sexp;
+pub mod temporal;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;

@@ -5,6 +5,7 @@ use polars::prelude::*;
 use serde::Deserialize;
 
 use crate::sexp::Value;
+use crate::temporal::{self, Unit};
 
 /// The target dtype, as sent from Python (see `_dtype_spec` in `__init__.py`).
 #[derive(Debug, Clone, Deserialize)]
@@ -12,10 +13,56 @@ use crate::sexp::Value;
 pub enum Spec {
     String,
     Boolean,
-    Int { bits: u8, signed: bool },
-    Float { bits: u8 },
-    List { inner: Box<Spec> },
-    Struct { fields: Vec<FieldSpec> },
+    Int {
+        bits: u8,
+        signed: bool,
+    },
+    Float {
+        bits: u8,
+    },
+    List {
+        inner: Box<Spec>,
+    },
+    Struct {
+        fields: Vec<FieldSpec>,
+    },
+    Date {
+        format: Option<String>,
+    },
+    Datetime {
+        unit: TimeUnitSpec,
+        time_zone: Option<String>,
+        format: Option<String>,
+    },
+    Duration {
+        unit: TimeUnitSpec,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeUnitSpec {
+    Ns,
+    Us,
+    Ms,
+}
+
+impl TimeUnitSpec {
+    fn polars(self) -> TimeUnit {
+        match self {
+            TimeUnitSpec::Ns => TimeUnit::Nanoseconds,
+            TimeUnitSpec::Us => TimeUnit::Microseconds,
+            TimeUnitSpec::Ms => TimeUnit::Milliseconds,
+        }
+    }
+
+    fn unit(self) -> Unit {
+        match self {
+            TimeUnitSpec::Ns => Unit::Ns,
+            TimeUnitSpec::Us => Unit::Us,
+            TimeUnitSpec::Ms => Unit::Ms,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,6 +99,11 @@ impl Spec {
                     .map(|f| Ok(Field::new(f.name.as_str().into(), f.dtype.dtype()?)))
                     .collect::<PolarsResult<_>>()?,
             ),
+            Spec::Date { .. } => DataType::Date,
+            Spec::Datetime {
+                unit, time_zone, ..
+            } => DataType::Datetime(unit.polars(), TimeZone::opt_try_new(time_zone.clone())?),
+            Spec::Duration { unit } => DataType::Duration(unit.polars()),
         })
     }
 }
@@ -64,6 +116,7 @@ impl Spec {
 /// - List: the elements of a list.
 /// - Struct: a record `((field value) ...)`; a field with several values,
 ///   like `(tags a b)`, is treated as the list of those values.
+/// - Date / Datetime / Duration: see the `temporal` module.
 pub fn decode(name: PlSmallStr, vals: &[Option<Value>], spec: &Spec) -> PolarsResult<Series> {
     let dtype = spec.dtype()?;
     let out = match spec {
@@ -119,6 +172,33 @@ pub fn decode(name: PlSmallStr, vals: &[Option<Value>], spec: &Spec) -> PolarsRe
             }
             builder.finish().into_series()
         }
+        Spec::Date { format } => vals
+            .iter()
+            .map(|v| temporal::parse_date(v.and_then(|v| v.as_atom())?, format.as_deref()))
+            .collect::<Int32Chunked>()
+            .into_series(),
+        Spec::Datetime { unit, format, .. } => {
+            let tz = match &dtype {
+                DataType::Datetime(_, Some(tz)) => Some(tz.to_chrono()?),
+                _ => None,
+            };
+            vals.iter()
+                .map(|v| {
+                    temporal::parse_datetime(
+                        v.and_then(|v| v.as_atom())?,
+                        format.as_deref(),
+                        unit.unit(),
+                        tz.as_ref(),
+                    )
+                })
+                .collect::<Int64Chunked>()
+                .into_series()
+        }
+        Spec::Duration { unit } => vals
+            .iter()
+            .map(|v| temporal::parse_duration(v.and_then(|v| v.as_atom())?, unit.unit()))
+            .collect::<Int64Chunked>()
+            .into_series(),
         Spec::Struct { fields } => {
             let present: BooleanChunked = vals
                 .iter()
@@ -140,7 +220,8 @@ pub fn decode(name: PlSmallStr, vals: &[Option<Value>], spec: &Spec) -> PolarsRe
                 .into_series()
         }
     };
-    // Narrow numeric types (e.g. Int64 -> Int8); out-of-range values become null.
+    // Narrow numeric types (e.g. Int64 -> Int8; out-of-range values become null)
+    // and attach temporal dtypes to their physical integers.
     let out = if out.dtype() == &dtype {
         out
     } else {

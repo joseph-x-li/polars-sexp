@@ -27,7 +27,7 @@ Missing, invalid or non-matching values become null.
 
 | Expression | Output | What it does |
 |---|---|---|
-| `.sexp.decode(dtype)` | `dtype` | Parse straight into a Polars type (see below). |
+| `.sexp.decode(dtype, format=None)` | `dtype` | Parse straight into a Polars type (see below). |
 | `.sexp.get(*path)` | `String` | Look up a field in record-style sexps like `((name foo) (price 3))`. Each key steps one record deeper. |
 | `.sexp.to_json()` | `String` | Lists become JSON arrays, atoms become JSON strings. A fallback for irregular data. |
 | `.sexp.is_valid()` | `Boolean` | True when the string is exactly one well-formed S-expression. |
@@ -39,6 +39,12 @@ Missing, invalid or non-matching values become null.
 - Integer and float types: atoms parsed as numbers.
 - `pl.List(inner)`: the elements of a list, each decoded as `inner`.
 - `pl.Struct(...)`: a record `((field value) ...)`. A field with several values, like `(tags a b)`, is treated as a list.
+- `pl.Date`: ISO `2026-10-12`.
+- `pl.Datetime(unit, time_zone)`: ISO forms like `2026-10-12T21:56:14`, `"2026-10-12 21:56:14.5"` or a bare date.
+  Values with an offset (`Z`, `+02:00`) become the instant they name; values without one are wall-clock times in `time_zone`.
+- `pl.Duration(unit)`: `1d2h30m`, `1.5s`, `-250ms` (units `w d h m s ms us ns`), or a bare integer in `unit`.
+
+`format` is a chrono strftime pattern (like `"%d/%m/%Y"`) that replaces the ISO defaults for every Date and Datetime in `dtype`.
 
 ```python
 df = pl.DataFrame({"s": ["((name apple) (price 3) (tags red fruit) (dims ((w 1.5) (h 2))))"]})

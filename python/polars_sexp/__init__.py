@@ -63,7 +63,7 @@ def get(expr: IntoExpr, *path: str) -> pl.Expr:
     )
 
 
-def decode(expr: IntoExpr, dtype: PolarsDataType) -> pl.Expr:
+def decode(expr: IntoExpr, dtype: PolarsDataType, *, format: str | None = None) -> pl.Expr:
     """Parse each string as one S-expression and decode it into ``dtype``.
 
     - ``pl.String``: atoms as-is, lists as S-expression text.
@@ -72,6 +72,16 @@ def decode(expr: IntoExpr, dtype: PolarsDataType) -> pl.Expr:
     - ``pl.List(inner)``: the elements of a list, each decoded as ``inner``.
     - ``pl.Struct(fields)``: a record ``((field value) ...)``, looked up by
       field name like :func:`get`.
+    - ``pl.Date``: ISO ``2026-10-12`` by default.
+    - ``pl.Datetime(unit, time_zone)``: ISO forms like ``2026-10-12T21:56:14``,
+      ``2026-10-12 21:56:14.5`` or a bare date. Values with an offset
+      (``Z``, ``+02:00``) are converted to the instant they name; values
+      without one are wall-clock times in ``time_zone`` (if set).
+    - ``pl.Duration(unit)``: compound forms like ``1d2h30m``, ``1.5s`` or
+      ``-250ms`` (units ``w d h m s ms us ns``), or a bare integer in ``unit``.
+
+    ``format`` is a chrono strftime pattern (like ``"%d/%m/%Y"``) used for
+    every Date and Datetime inside ``dtype`` instead of the ISO defaults.
 
     Anything missing, invalid or not matching the dtype becomes null.
     """
@@ -79,7 +89,7 @@ def decode(expr: IntoExpr, dtype: PolarsDataType) -> pl.Expr:
         plugin_path=PLUGIN_PATH,
         function_name="sexp_decode",
         args=expr,
-        kwargs={"dtype": _dtype_spec(dtype)},
+        kwargs={"dtype": _dtype_spec(dtype, format)},
         is_elementwise=True,
     )
 
@@ -96,8 +106,10 @@ _INTS = {
 }
 
 
-def _dtype_spec(dtype: PolarsDataType) -> dict[str, Any]:
+def _dtype_spec(dtype: PolarsDataType, format: str | None = None) -> dict[str, Any]:
     """Describe a Polars dtype in the form the Rust side deserializes."""
+    if isinstance(dtype, type) and dtype in (pl.Datetime, pl.Duration):
+        dtype = dtype()  # bare class: use Polars' default time unit
     if dtype == pl.String:
         return {"kind": "string"}
     if dtype == pl.Boolean:
@@ -109,12 +121,25 @@ def _dtype_spec(dtype: PolarsDataType) -> dict[str, Any]:
         return {"kind": "float", "bits": 32}
     if dtype == pl.Float64:
         return {"kind": "float", "bits": 64}
+    if dtype == pl.Date:
+        return {"kind": "date", "format": format}
+    if isinstance(dtype, pl.Datetime):
+        return {
+            "kind": "datetime",
+            "unit": dtype.time_unit,
+            "time_zone": dtype.time_zone,
+            "format": format,
+        }
+    if isinstance(dtype, pl.Duration):
+        return {"kind": "duration", "unit": dtype.time_unit}
     if isinstance(dtype, pl.List):
-        return {"kind": "list", "inner": _dtype_spec(dtype.inner)}
+        return {"kind": "list", "inner": _dtype_spec(dtype.inner, format)}
     if isinstance(dtype, pl.Struct):
         return {
             "kind": "struct",
-            "fields": [{"name": f.name, "dtype": _dtype_spec(f.dtype)} for f in dtype.fields],
+            "fields": [
+                {"name": f.name, "dtype": _dtype_spec(f.dtype, format)} for f in dtype.fields
+            ],
         }
     msg = f"decode() does not support dtype {dtype}"
     raise TypeError(msg)
@@ -136,5 +161,5 @@ class SexpNamespace:
     def get(self, *path: str) -> pl.Expr:
         return get(self._expr, *path)
 
-    def decode(self, dtype: PolarsDataType) -> pl.Expr:
-        return decode(self._expr, dtype)
+    def decode(self, dtype: PolarsDataType, *, format: str | None = None) -> pl.Expr:
+        return decode(self._expr, dtype, format=format)
