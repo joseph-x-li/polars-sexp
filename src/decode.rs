@@ -23,6 +23,10 @@ pub enum DtypeSpec {
     List {
         inner: Box<DtypeSpec>,
     },
+    Array {
+        inner: Box<DtypeSpec>,
+        width: usize,
+    },
     Struct {
         fields: Vec<FieldSpec>,
     },
@@ -61,6 +65,7 @@ impl DtypeSpec {
             DtypeSpec::Float32 => DataType::Float32,
             DtypeSpec::Float64 => DataType::Float64,
             DtypeSpec::List { inner } => DataType::List(Box::new(inner.dtype()?)),
+            DtypeSpec::Array { inner, width } => DataType::Array(Box::new(inner.dtype()?), *width),
             DtypeSpec::Struct { fields } => DataType::Struct(
                 fields
                     .iter()
@@ -108,7 +113,8 @@ pub fn decode(name: PlSmallStr, vals: &[Option<Value>], spec: &DtypeSpec) -> Pol
             .map(|atom| atom?.parse::<f64>().ok())
             .collect::<Float64Chunked>()
             .into_series(),
-        DtypeSpec::List { inner } => decode_list(&name, vals, inner)?,
+        DtypeSpec::List { inner } => decode_list(&name, vals, inner, None)?,
+        DtypeSpec::Array { inner, width } => decode_list(&name, vals, inner, Some(*width))?,
         DtypeSpec::Struct { fields } => decode_struct(&name, vals, fields)?,
         DtypeSpec::Date { format } => atoms(vals)
             .map(|atom| temporal::parse_days_since_epoch(atom?, format.as_deref()))
@@ -151,8 +157,15 @@ fn decode_list(
     name: &PlSmallStr,
     vals: &[Option<Value>],
     inner: &DtypeSpec,
+    required_len: Option<usize>,
 ) -> PolarsResult<Series> {
-    let rows: Vec<Option<&[_]>> = vals.iter().map(|v| v.and_then(|v| v.as_items())).collect();
+    let rows: Vec<Option<&[_]>> = vals
+        .iter()
+        .map(|v| {
+            v.and_then(|v| v.as_list_elements())
+                .filter(|items| required_len.is_none_or(|len| items.len() == len))
+        })
+        .collect();
     let children: Vec<Option<Value>> = rows
         .iter()
         .flatten()

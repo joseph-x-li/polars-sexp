@@ -1,4 +1,4 @@
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use polars::prelude::TimeUnit;
 use serde::Deserialize;
 
@@ -15,7 +15,12 @@ const ISO_WALL_CLOCK_FORMATS: &[&str] = &[
     "%Y-%m-%d %H:%M",
 ];
 
-const ISO_OFFSET_FORMATS: &[&str] = &["%Y-%m-%dT%H:%M:%S%.f%z", "%Y-%m-%d %H:%M:%S%.f%z"];
+const ISO_OFFSET_FORMATS: &[&str] = &[
+    "%Y-%m-%dT%H:%M:%S%.f%#z",
+    "%Y-%m-%d %H:%M:%S%.f%#z",
+    "%Y-%m-%dT%H:%M%#z",
+    "%Y-%m-%d %H:%M%#z",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,7 +49,12 @@ impl Unit {
 }
 
 pub fn parse_days_since_epoch(s: &str, format: Option<&str>) -> Option<i32> {
-    let date = NaiveDate::parse_from_str(s, format.unwrap_or(ISO_DATE)).ok()?;
+    let date = match format {
+        None => NaiveDate::parse_from_str(s, ISO_DATE).ok()?,
+        Some(fmt) => NaiveDate::parse_from_str(s, fmt)
+            .or_else(|_| NaiveDateTime::parse_from_str(s, fmt).map(|dt| dt.date()))
+            .ok()?,
+    };
     let epoch = DateTime::UNIX_EPOCH.date_naive();
     i32::try_from((date - epoch).num_days()).ok()
 }
@@ -60,6 +70,10 @@ fn parse_datetime(s: &str, format: Option<&str>) -> Option<ParsedDatetime> {
         return DateTime::parse_from_str(s, fmt)
             .map(instant)
             .or_else(|_| NaiveDateTime::parse_from_str(s, fmt).map(ParsedDatetime::WallClock))
+            .or_else(|_| {
+                NaiveDate::parse_from_str(s, fmt)
+                    .map(|d| ParsedDatetime::WallClock(d.and_time(NaiveTime::MIN)))
+            })
             .ok();
     }
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
@@ -79,7 +93,7 @@ fn parse_datetime(s: &str, format: Option<&str>) -> Option<ParsedDatetime> {
     }
     let midnight = NaiveDate::parse_from_str(s, ISO_DATE)
         .ok()?
-        .and_hms_opt(0, 0, 0)?;
+        .and_time(NaiveTime::MIN);
     Some(ParsedDatetime::WallClock(midnight))
 }
 
@@ -152,7 +166,7 @@ fn exact_decimal_product(decimal: &str, factor: i128) -> Option<i128> {
     let mut place = factor;
     for digit in frac.chars() {
         place /= 10;
-        product += i128::from(digit.to_digit(10)?) * place;
+        product = product.checked_add(i128::from(digit.to_digit(10)?) * place)?;
     }
     Some(product)
 }
@@ -195,6 +209,19 @@ mod tests {
     }
 
     #[test]
+    fn offsets_parse_without_seconds_or_minutes() {
+        let at_ten_utc = parse_timestamp("2026-01-01T10:00:00Z", None, Unit::Ms, None);
+        assert_eq!(
+            parse_timestamp("2026-01-01T10:00Z", None, Unit::Ms, None),
+            at_ten_utc
+        );
+        assert_eq!(
+            parse_timestamp("2026-01-01 12:00+02", None, Unit::Ms, None),
+            at_ten_utc
+        );
+    }
+
+    #[test]
     fn wall_clock_in_a_dst_gap_is_null() {
         assert_eq!(
             parse_timestamp("2026-03-08 02:30", None, Unit::Ms, Some(&new_york())),
@@ -221,5 +248,11 @@ mod tests {
     fn fractional_durations_are_exact() {
         assert_eq!(parse_duration("0.3s", Unit::Ns), Some(300_000_000));
         assert_eq!(parse_duration("-1d0.5h", Unit::Ms), Some(-88_200_000));
+    }
+
+    #[test]
+    fn fraction_that_tips_the_total_past_i128_is_null() {
+        let whole_us = (i128::MAX / NS_PER_US).to_string();
+        assert_eq!(parse_duration(&format!("{whole_us}.999us"), Unit::Ns), None);
     }
 }

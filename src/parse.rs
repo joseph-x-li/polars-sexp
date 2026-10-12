@@ -1,5 +1,7 @@
 use crate::sexp::{is_delimiter, Sexp};
 
+const MAX_NESTING_DEPTH: usize = 1024;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub pos: usize,
@@ -10,6 +12,7 @@ pub fn parse_exactly_one(input: &str) -> Result<Sexp, ParseError> {
     let mut p = Parser {
         src: input.as_bytes(),
         pos: 0,
+        depth: 0,
     };
     let sexp = p.parse_sexp()?;
     p.skip_whitespace_and_comments();
@@ -22,6 +25,7 @@ pub fn parse_exactly_one(input: &str) -> Result<Sexp, ParseError> {
 struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -64,7 +68,11 @@ impl Parser<'_> {
     }
 
     fn parse_list(&mut self) -> Result<Sexp, ParseError> {
+        if self.depth == MAX_NESTING_DEPTH {
+            return Err(self.err("lists nested too deeply"));
+        }
         self.consume(b'(');
+        self.depth += 1;
         let mut items = Vec::new();
         loop {
             self.skip_whitespace_and_comments();
@@ -72,6 +80,7 @@ impl Parser<'_> {
                 None => return Err(self.err("unclosed '('")),
                 Some(b')') => {
                     self.consume(b')');
+                    self.depth -= 1;
                     return Ok(Sexp::List(items));
                 }
                 Some(_) => items.push(self.parse_sexp()?),
@@ -144,6 +153,14 @@ mod tests {
     #[test]
     fn unknown_escapes_keep_the_escaped_char_even_when_multibyte() {
         assert_eq!(parse_exactly_one(r#""\q\"\λ\n""#).unwrap(), atom("q\"λ\n"));
+    }
+
+    #[test]
+    fn nesting_beyond_the_depth_limit_is_an_error_not_a_stack_overflow() {
+        let nested = |depth: usize| "(".repeat(depth) + &")".repeat(depth);
+        assert!(parse_exactly_one(&nested(MAX_NESTING_DEPTH)).is_ok());
+        assert!(parse_exactly_one(&nested(MAX_NESTING_DEPTH + 1)).is_err());
+        assert!(parse_exactly_one(&nested(1_000_000)).is_err());
     }
 
     #[test]

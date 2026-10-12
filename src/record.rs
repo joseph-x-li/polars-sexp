@@ -3,32 +3,48 @@ use crate::sexp::Sexp;
 #[derive(Debug, Clone, Copy)]
 pub enum Value<'a> {
     Node(&'a Sexp),
-    MultiValueField(&'a [Sexp]),
+    FieldValues(&'a [Sexp]),
+}
+
+enum Shape<'a> {
+    One(&'a Sexp),
+    Several(&'a [Sexp]),
 }
 
 impl<'a> Value<'a> {
-    pub fn as_atom(self) -> Option<&'a str> {
+    fn shape(self) -> Shape<'a> {
         match self {
-            Value::Node(Sexp::Atom(s)) => Some(s),
+            Value::Node(sexp) | Value::FieldValues([sexp]) => Shape::One(sexp),
+            Value::FieldValues(values) => Shape::Several(values),
+        }
+    }
+
+    pub fn as_atom(self) -> Option<&'a str> {
+        match self.shape() {
+            Shape::One(Sexp::Atom(s)) => Some(s),
             _ => None,
         }
     }
 
     pub fn as_items(self) -> Option<&'a [Sexp]> {
+        match self.shape() {
+            Shape::One(Sexp::List(items)) => Some(items),
+            Shape::Several(items) => Some(items),
+            Shape::One(Sexp::Atom(_)) => None,
+        }
+    }
+
+    pub fn as_list_elements(self) -> Option<&'a [Sexp]> {
         match self {
-            Value::Node(Sexp::List(items)) => Some(items),
-            Value::MultiValueField(items) => Some(items),
-            Value::Node(Sexp::Atom(_)) => None,
+            Value::FieldValues(values @ [Sexp::Atom(_)]) => Some(values),
+            _ => self.as_items(),
         }
     }
 
     pub fn record_field(self, key: &str) -> Option<Value<'a>> {
         self.as_items()?.iter().find_map(|item| match item {
             Sexp::List(entry) => match entry.split_first() {
-                Some((Sexp::Atom(k), values)) if k == key => Some(match values {
-                    [single] => Value::Node(single),
-                    several => Value::MultiValueField(several),
-                }),
+                Some((Sexp::Atom(k), values)) if k == key => Some(Value::FieldValues(values)),
                 _ => None,
             },
             Sexp::Atom(_) => None,
@@ -36,10 +52,10 @@ impl<'a> Value<'a> {
     }
 
     pub fn to_text_with_bare_atom(self) -> String {
-        match self {
-            Value::Node(Sexp::Atom(s)) => s.clone(),
-            Value::Node(sexp) => sexp.to_string(),
-            Value::MultiValueField(items) => Sexp::List(items.to_vec()).to_string(),
+        match self.shape() {
+            Shape::One(Sexp::Atom(s)) => s.clone(),
+            Shape::One(sexp) => sexp.to_string(),
+            Shape::Several(values) => Sexp::List(values.to_vec()).to_string(),
         }
     }
 }

@@ -47,6 +47,8 @@ def dtype_spec(dtype: PolarsDataType, format: str | None) -> dict[str, Any]:
         return {"kind": "duration", "unit": dtype.time_unit}
     if isinstance(dtype, pl.List):
         return {"kind": "list", "inner": dtype_spec(dtype.inner, format)}
+    if isinstance(dtype, pl.Array):
+        return {"kind": "array", "inner": dtype_spec(dtype.inner, format), "width": dtype.size}
     if isinstance(dtype, pl.Struct):
         return {
             "kind": "struct",
