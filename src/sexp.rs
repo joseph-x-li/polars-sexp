@@ -8,7 +8,7 @@
 //!   symbol:= one or more chars that are not whitespace, '(', ')', '"' or ';'
 //! Line comments start with ';'.
 
-use serde_json::Value;
+use serde_json::Value as Json;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sexp {
@@ -18,10 +18,103 @@ pub enum Sexp {
 
 impl Sexp {
     /// Lists become JSON arrays, atoms become JSON strings.
-    pub fn to_json(&self) -> Value {
+    pub fn to_json(&self) -> Json {
         match self {
-            Sexp::Atom(s) => Value::String(s.clone()),
-            Sexp::List(items) => Value::Array(items.iter().map(Sexp::to_json).collect()),
+            Sexp::Atom(s) => Json::String(s.clone()),
+            Sexp::List(items) => Json::Array(items.iter().map(Sexp::to_json).collect()),
+        }
+    }
+}
+
+impl std::fmt::Display for Sexp {
+    /// Canonical text form: single spaces, atoms quoted only when needed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Sexp::Atom(s) => write_atom(f, s),
+            Sexp::List(items) => write_list(f, items),
+        }
+    }
+}
+
+fn write_atom(f: &mut std::fmt::Formatter<'_>, s: &str) -> std::fmt::Result {
+    let needs_quotes = s.is_empty()
+        || s.bytes()
+            .any(|c| c.is_ascii_whitespace() || matches!(c, b'(' | b')' | b'"' | b';' | b'\\'));
+    if !needs_quotes {
+        return f.write_str(s);
+    }
+    f.write_str("\"")?;
+    for c in s.chars() {
+        match c {
+            '"' => f.write_str("\\\"")?,
+            '\\' => f.write_str("\\\\")?,
+            '\n' => f.write_str("\\n")?,
+            '\t' => f.write_str("\\t")?,
+            '\r' => f.write_str("\\r")?,
+            c => write!(f, "{c}")?,
+        }
+    }
+    f.write_str("\"")
+}
+
+fn write_list(f: &mut std::fmt::Formatter<'_>, items: &[Sexp]) -> std::fmt::Result {
+    f.write_str("(")?;
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            f.write_str(" ")?;
+        }
+        write!(f, "{item}")?;
+    }
+    f.write_str(")")
+}
+
+/// A view into a parsed S-expression: either one node, or the tail of a
+/// record field like `(tags a b c)`, which holds several values.
+#[derive(Debug, Clone, Copy)]
+pub enum Value<'a> {
+    One(&'a Sexp),
+    Many(&'a [Sexp]),
+}
+
+impl<'a> Value<'a> {
+    /// The atom's text, if this is a single atom.
+    pub fn as_atom(&self) -> Option<&'a str> {
+        match self {
+            Value::One(Sexp::Atom(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The elements, if this is a list (or a multi-value field tail).
+    pub fn as_items(&self) -> Option<&'a [Sexp]> {
+        match self {
+            Value::One(Sexp::List(items)) => Some(items),
+            Value::Many(items) => Some(items),
+            Value::One(Sexp::Atom(_)) => None,
+        }
+    }
+
+    /// Look up `key` treating this value as a record `((key value...) ...)`.
+    /// A field with one value yields that value; with several, all of them.
+    pub fn field(&self, key: &str) -> Option<Value<'a>> {
+        self.as_items()?.iter().find_map(|item| match item {
+            Sexp::List(kv) => match kv.split_first() {
+                Some((Sexp::Atom(k), rest)) if k == key => Some(match rest {
+                    [one] => Value::One(one),
+                    many => Value::Many(many),
+                }),
+                _ => None,
+            },
+            Sexp::Atom(_) => None,
+        })
+    }
+
+    /// Atoms as their raw text, everything else as canonical S-expression text.
+    pub fn to_text(&self) -> String {
+        match self {
+            Value::One(Sexp::Atom(s)) => s.clone(),
+            Value::One(sexp) => sexp.to_string(),
+            Value::Many(items) => Sexp::List(items.to_vec()).to_string(),
         }
     }
 }
@@ -190,5 +283,27 @@ mod tests {
     fn to_json() {
         let s = parse("(a (b 1))").unwrap();
         assert_eq!(s.to_json().to_string(), r#"["a",["b","1"]]"#);
+    }
+
+    #[test]
+    fn display_roundtrips() {
+        let src = r#"(a "b c" ("q\"x") "" (λ))"#;
+        let s = parse(src).unwrap();
+        assert_eq!(s.to_string(), src);
+        assert_eq!(parse(&s.to_string()).unwrap(), s);
+    }
+
+    #[test]
+    fn record_fields() {
+        let s = parse("((name foo) (price 3) (tags a b) (inner ((x 1))))").unwrap();
+        let v = Value::One(&s);
+        assert_eq!(v.field("name").unwrap().as_atom(), Some("foo"));
+        assert_eq!(v.field("tags").unwrap().to_text(), "(a b)");
+        assert_eq!(
+            v.field("inner").unwrap().field("x").unwrap().as_atom(),
+            Some("1")
+        );
+        assert!(v.field("missing").is_none());
+        assert!(v.field("name").unwrap().field("x").is_none());
     }
 }

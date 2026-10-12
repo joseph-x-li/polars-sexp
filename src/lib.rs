@@ -1,3 +1,4 @@
+mod decode;
 mod expressions;
 pub mod sexp;
 
