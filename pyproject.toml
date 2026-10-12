@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "polars-sexp"
+version = "0.1.0"
+description = "Parse S-expressions in Polars"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = ["polars>=2.0"]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.maturin]
+module-name = "polars_sexp._internal"
+python-source = "python"
+features = ["pyo3/extension-module"]
