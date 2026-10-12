@@ -1,6 +1,6 @@
 use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use polars::prelude::TimeUnit;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const NS_PER_US: i128 = 1_000;
 const NS_PER_MS: i128 = 1_000_000;
@@ -22,7 +22,9 @@ const ISO_OFFSET_FORMATS: &[&str] = &[
     "%Y-%m-%d %H:%M%#z",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+const ISO_TIME_FORMATS: &[&str] = &["%H:%M:%S%.f", "%H:%M"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Unit {
     Ns,
@@ -46,6 +48,22 @@ impl Unit {
             Unit::Ms => TimeUnit::Milliseconds,
         }
     }
+
+    pub fn from_polars(unit: TimeUnit) -> Self {
+        match unit {
+            TimeUnit::Nanoseconds => Unit::Ns,
+            TimeUnit::Microseconds => Unit::Us,
+            TimeUnit::Milliseconds => Unit::Ms,
+        }
+    }
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Unit::Ns => "ns",
+            Unit::Us => "us",
+            Unit::Ms => "ms",
+        }
+    }
 }
 
 pub fn parse_days_since_epoch(s: &str, format: Option<&str>) -> Option<i32> {
@@ -57,6 +75,70 @@ pub fn parse_days_since_epoch(s: &str, format: Option<&str>) -> Option<i32> {
     };
     let epoch = DateTime::UNIX_EPOCH.date_naive();
     i32::try_from((date - epoch).num_days()).ok()
+}
+
+pub fn parse_nanos_since_midnight(s: &str, format: Option<&str>) -> Option<i64> {
+    let time = match format {
+        None => ISO_TIME_FORMATS
+            .iter()
+            .find_map(|f| NaiveTime::parse_from_str(s, f).ok())?,
+        Some(fmt) => NaiveTime::parse_from_str(s, fmt)
+            .or_else(|_| NaiveDateTime::parse_from_str(s, fmt).map(|dt| dt.time()))
+            .ok()?,
+    };
+    let since_midnight = time - NaiveTime::MIN;
+    since_midnight.num_nanoseconds()
+}
+
+pub enum DatetimeKind {
+    WallClock,
+    Instant,
+}
+
+pub fn classify_datetime(s: &str) -> Option<DatetimeKind> {
+    Some(match parse_datetime(s, None)? {
+        ParsedDatetime::Instant(_) => DatetimeKind::Instant,
+        ParsedDatetime::WallClock(_) => DatetimeKind::WallClock,
+    })
+}
+
+pub fn format_date(days_since_epoch: i32) -> Option<String> {
+    let date = DateTime::UNIX_EPOCH
+        .date_naive()
+        .checked_add_signed(chrono::TimeDelta::try_days(days_since_epoch.into())?)?;
+    Some(date.format(ISO_DATE).to_string())
+}
+
+pub fn format_timestamp(
+    count_in_unit: i64,
+    unit: Unit,
+    zone: Option<&chrono_tz::Tz>,
+) -> Option<String> {
+    let instant = match unit {
+        Unit::Ns => DateTime::from_timestamp_nanos(count_in_unit),
+        Unit::Us => DateTime::from_timestamp_micros(count_in_unit)?,
+        Unit::Ms => DateTime::from_timestamp_millis(count_in_unit)?,
+    };
+    Some(match zone {
+        None => instant
+            .naive_utc()
+            .format("%Y-%m-%dT%H:%M:%S%.f")
+            .to_string(),
+        Some(tz) => instant
+            .with_timezone(tz)
+            .format("%Y-%m-%dT%H:%M:%S%.f%:z")
+            .to_string(),
+    })
+}
+
+pub fn format_time(nanos_since_midnight: i64) -> String {
+    let since_midnight = chrono::TimeDelta::nanoseconds(nanos_since_midnight);
+    let time = NaiveTime::MIN.overflowing_add_signed(since_midnight).0;
+    time.format("%H:%M:%S%.f").to_string()
+}
+
+pub fn format_duration(count_in_unit: i64, unit: Unit) -> String {
+    format!("{count_in_unit}{}", unit.suffix())
 }
 
 enum ParsedDatetime {

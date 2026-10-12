@@ -1,5 +1,7 @@
 mod decode;
+mod encode;
 mod expressions;
+mod infer;
 mod parse;
 mod record;
 mod sexp;

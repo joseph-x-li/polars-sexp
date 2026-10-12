@@ -11,6 +11,16 @@ enum Shape<'a> {
     Several(&'a [Sexp]),
 }
 
+pub fn field_in<'a>(entries: &'a [Sexp], key: &str) -> Option<Value<'a>> {
+    entries.iter().find_map(|item| match item {
+        Sexp::List(entry) => match entry.split_first() {
+            Some((Sexp::Atom(k), values)) if k == key => Some(Value::FieldValues(values)),
+            _ => None,
+        },
+        Sexp::Atom(_) => None,
+    })
+}
+
 impl<'a> Value<'a> {
     fn shape(self) -> Shape<'a> {
         match self {
@@ -34,6 +44,17 @@ impl<'a> Value<'a> {
         }
     }
 
+    pub fn is_nil(self) -> bool {
+        self.as_items().is_some_and(<[Sexp]>::is_empty)
+    }
+
+    pub fn as_field_values(self) -> Option<&'a [Sexp]> {
+        match self {
+            Value::FieldValues(values) => Some(values),
+            Value::Node(_) => None,
+        }
+    }
+
     pub fn as_list_elements(self) -> Option<&'a [Sexp]> {
         match self {
             Value::FieldValues(values @ [Sexp::Atom(_)]) => Some(values),
@@ -42,13 +63,7 @@ impl<'a> Value<'a> {
     }
 
     pub fn record_field(self, key: &str) -> Option<Value<'a>> {
-        self.as_items()?.iter().find_map(|item| match item {
-            Sexp::List(entry) => match entry.split_first() {
-                Some((Sexp::Atom(k), values)) if k == key => Some(Value::FieldValues(values)),
-                _ => None,
-            },
-            Sexp::Atom(_) => None,
-        })
+        field_in(self.as_items()?, key)
     }
 
     pub fn to_text_with_bare_atom(self) -> String {
