@@ -38,10 +38,11 @@ Missing, invalid or non-matching values become null.
 - `pl.Boolean`: the atoms `true` and `false`.
 - Integer and float types: atoms parsed as numbers.
 - `pl.List(inner)`: the elements of a list, each decoded as `inner`.
+- `pl.Array(inner, shape)`: like `pl.List`, but a list of the wrong length is null.
 - `pl.Struct(...)`: a record `((field value) ...)`. A field with several values, like `(tags a b)`, is treated as a list, and so is a field with a single atom, like `(tags a)`.
 - `pl.Date`: ISO `2026-10-12`.
 - `pl.Datetime(unit, time_zone)`: ISO forms like `2026-10-12T21:56:14`, `"2026-10-12 21:56:14.5"` or a bare date.
-  Values with an offset (`Z`, `+02:00`) become the instant they name; values without one are wall-clock times in `time_zone`.
+  Values with an offset (`Z`, `+02:00`, `+02`) become the instant they name; values without one are wall-clock times in `time_zone`.
 - `pl.Duration(unit)`: `1d2h30m`, `1.5s`, `-250ms` (units `w d h m s ms us ns`), or a bare integer in `unit`.
 
 `format` is a chrono strftime pattern (like `"%d/%m/%Y"`) that replaces the ISO defaults for every Date and Datetime in `dtype`.

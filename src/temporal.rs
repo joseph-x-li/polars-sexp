@@ -15,7 +15,12 @@ const ISO_WALL_CLOCK_FORMATS: &[&str] = &[
     "%Y-%m-%d %H:%M",
 ];
 
-const ISO_OFFSET_FORMATS: &[&str] = &["%Y-%m-%dT%H:%M:%S%.f%z", "%Y-%m-%d %H:%M:%S%.f%z"];
+const ISO_OFFSET_FORMATS: &[&str] = &[
+    "%Y-%m-%dT%H:%M:%S%.f%#z",
+    "%Y-%m-%d %H:%M:%S%.f%#z",
+    "%Y-%m-%dT%H:%M%#z",
+    "%Y-%m-%d %H:%M%#z",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -200,6 +205,19 @@ mod tests {
         assert_eq!(
             parse_timestamp("1970-01-01 00:00:00", None, Unit::Ms, Some(&ny)),
             Some(5 * 3_600_000)
+        );
+    }
+
+    #[test]
+    fn offsets_parse_without_seconds_or_minutes() {
+        let at_ten_utc = parse_timestamp("2026-01-01T10:00:00Z", None, Unit::Ms, None);
+        assert_eq!(
+            parse_timestamp("2026-01-01T10:00Z", None, Unit::Ms, None),
+            at_ten_utc
+        );
+        assert_eq!(
+            parse_timestamp("2026-01-01 12:00+02", None, Unit::Ms, None),
+            at_ten_utc
         );
     }
 

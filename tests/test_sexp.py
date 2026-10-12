@@ -73,3 +73,17 @@ def test_one_format_serves_both_date_and_datetime_fields():
         {"day": date(2026, 2, 1), "at": datetime(2026, 2, 1)},
         {"day": date(2026, 2, 1), "at": datetime(2026, 2, 1, 10, 30)},
     )
+
+
+def test_array_rows_of_the_wrong_width_are_null():
+    df = pl.DataFrame({"s": ["(1 2 3)", "(1 2)", "((1 2 3) (4 5 6))"]})
+    assert df.select(pl.col("s").sexp.decode(pl.Array(pl.Int8, 3)))["s"].to_list() == [
+        [1, 2, 3],
+        None,
+        None,
+    ]
+    assert df.select(pl.col("s").sexp.decode(pl.Array(pl.Int8, (2, 3))))["s"].to_list() == [
+        None,
+        [None, None],
+        [[1, 2, 3], [4, 5, 6]],
+    ]
