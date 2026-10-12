@@ -28,7 +28,7 @@ Missing, invalid or non-matching values become null.
 | Expression | Output | What it does |
 |---|---|---|
 | `.sexp.decode(dtype, format=None)` | `dtype` | Parse straight into a Polars type (see below). |
-| `.sexp.get(*path)` | `String` | Look up a field in record-style sexps like `((name foo) (price 3))`. Each key steps one record deeper. |
+| `.sexp.get(key, *nested_keys)` | `String` | Look up a field in record-style sexps like `((name foo) (price 3))`. Each key steps one record deeper. |
 | `.sexp.to_json()` | `String` | Lists become JSON arrays, atoms become JSON strings. A fallback for irregular data. |
 | `.sexp.is_valid()` | `Boolean` | True when the string is exactly one well-formed S-expression. |
 
@@ -75,7 +75,13 @@ cargo test                  # Rust parser unit tests
 
 Layout:
 
-- `src/sexp.rs`: the parser (pure Rust, no Polars).
+- `src/sexp.rs`: the `Sexp` type and its canonical text form.
+- `src/parse.rs`: the parser (pure Rust, no Polars).
+- `src/record.rs`: record field lookup over `((key value) ...)`.
+- `src/temporal.rs`: date, datetime and duration parsing.
 - `src/decode.rs`: decoding parsed sexps into Polars dtypes.
 - `src/expressions.rs`: `#[polars_expr]` functions that Polars calls.
 - `python/polars_sexp/__init__.py`: Python wrappers and the `.sexp` namespace.
+- `python/polars_sexp/_dtype_spec.py`: describes a Polars dtype for the Rust side.
+
+The code has no comments: names and types carry intent, and each non-obvious edge case is a test.

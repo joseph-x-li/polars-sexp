@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import polars as pl
 from polars.plugins import register_plugin_function
 
+from polars_sexp._dtype_spec import dtype_spec
 from polars_sexp._internal import __version__
 
 if TYPE_CHECKING:
@@ -16,139 +17,34 @@ __all__ = ["__version__", "decode", "get", "is_valid", "to_json"]
 PLUGIN_PATH = Path(__file__).parent
 
 
-def to_json(expr: IntoExpr) -> pl.Expr:
-    """Parse each string as one S-expression and encode it as JSON.
-
-    Lists become JSON arrays and atoms become JSON strings, so
-    ``(add 1 (mul 2 3))`` becomes ``["add","1",["mul","2","3"]]``.
-    Strings that are not exactly one well-formed S-expression become null.
-    """
+def _call_plugin(function_name: str, expr: IntoExpr, **kwargs: object) -> pl.Expr:
     return register_plugin_function(
         plugin_path=PLUGIN_PATH,
-        function_name="sexp_to_json",
+        function_name=function_name,
         args=expr,
+        kwargs=kwargs or None,
         is_elementwise=True,
     )
+
+
+def to_json(expr: IntoExpr) -> pl.Expr:
+    return _call_plugin("sexp_to_json", expr)
 
 
 def is_valid(expr: IntoExpr) -> pl.Expr:
-    """Return whether each string is exactly one well-formed S-expression."""
-    return register_plugin_function(
-        plugin_path=PLUGIN_PATH,
-        function_name="sexp_is_valid",
-        args=expr,
-        is_elementwise=True,
-    )
+    return _call_plugin("sexp_is_valid", expr)
 
 
-def get(expr: IntoExpr, *path: str) -> pl.Expr:
-    """Look up a field in record-style S-expressions like ``((name foo) (price 3))``.
-
-    Each key in ``path`` steps one level into a nested record, so
-    ``get("s", "inner", "x")`` reads ``((inner ((x 1))))`` as ``"1"``.
-    A field with one value returns it; a field with several, like
-    ``(tags a b)``, returns them as the list ``"(a b)"``. Atoms come back as
-    their text and lists as S-expression text. Missing keys and invalid
-    input become null.
-    """
-    if not path:
-        msg = "get() needs at least one key"
-        raise ValueError(msg)
-    return register_plugin_function(
-        plugin_path=PLUGIN_PATH,
-        function_name="sexp_get",
-        args=expr,
-        kwargs={"path": list(path)},
-        is_elementwise=True,
-    )
+def get(expr: IntoExpr, key: str, *nested_keys: str) -> pl.Expr:
+    return _call_plugin("sexp_get", expr, path=[key, *nested_keys])
 
 
 def decode(expr: IntoExpr, dtype: PolarsDataType, *, format: str | None = None) -> pl.Expr:
-    """Parse each string as one S-expression and decode it into ``dtype``.
-
-    - ``pl.String``: atoms as-is, lists as S-expression text.
-    - ``pl.Boolean``: the atoms ``true`` and ``false``.
-    - Integer and float types: atoms parsed as numbers.
-    - ``pl.List(inner)``: the elements of a list, each decoded as ``inner``.
-    - ``pl.Struct(fields)``: a record ``((field value) ...)``, looked up by
-      field name like :func:`get`.
-    - ``pl.Date``: ISO ``2026-10-12`` by default.
-    - ``pl.Datetime(unit, time_zone)``: ISO forms like ``2026-10-12T21:56:14``,
-      ``2026-10-12 21:56:14.5`` or a bare date. Values with an offset
-      (``Z``, ``+02:00``) are converted to the instant they name; values
-      without one are wall-clock times in ``time_zone`` (if set).
-    - ``pl.Duration(unit)``: compound forms like ``1d2h30m``, ``1.5s`` or
-      ``-250ms`` (units ``w d h m s ms us ns``), or a bare integer in ``unit``.
-
-    ``format`` is a chrono strftime pattern (like ``"%d/%m/%Y"``) used for
-    every Date and Datetime inside ``dtype`` instead of the ISO defaults.
-
-    Anything missing, invalid or not matching the dtype becomes null.
-    """
-    return register_plugin_function(
-        plugin_path=PLUGIN_PATH,
-        function_name="sexp_decode",
-        args=expr,
-        kwargs={"dtype": _dtype_spec(dtype, format)},
-        is_elementwise=True,
-    )
-
-
-_INTS = {
-    pl.Int8: (8, True),
-    pl.Int16: (16, True),
-    pl.Int32: (32, True),
-    pl.Int64: (64, True),
-    pl.UInt8: (8, False),
-    pl.UInt16: (16, False),
-    pl.UInt32: (32, False),
-    pl.UInt64: (64, False),
-}
-
-
-def _dtype_spec(dtype: PolarsDataType, format: str | None = None) -> dict[str, Any]:
-    """Describe a Polars dtype in the form the Rust side deserializes."""
-    if isinstance(dtype, type) and dtype in (pl.Datetime, pl.Duration):
-        dtype = dtype()  # bare class: use Polars' default time unit
-    if dtype == pl.String:
-        return {"kind": "string"}
-    if dtype == pl.Boolean:
-        return {"kind": "boolean"}
-    for int_type, (bits, signed) in _INTS.items():
-        if dtype == int_type:
-            return {"kind": "int", "bits": bits, "signed": signed}
-    if dtype == pl.Float32:
-        return {"kind": "float", "bits": 32}
-    if dtype == pl.Float64:
-        return {"kind": "float", "bits": 64}
-    if dtype == pl.Date:
-        return {"kind": "date", "format": format}
-    if isinstance(dtype, pl.Datetime):
-        return {
-            "kind": "datetime",
-            "unit": dtype.time_unit,
-            "time_zone": dtype.time_zone,
-            "format": format,
-        }
-    if isinstance(dtype, pl.Duration):
-        return {"kind": "duration", "unit": dtype.time_unit}
-    if isinstance(dtype, pl.List):
-        return {"kind": "list", "inner": _dtype_spec(dtype.inner, format)}
-    if isinstance(dtype, pl.Struct):
-        return {
-            "kind": "struct",
-            "fields": [
-                {"name": f.name, "dtype": _dtype_spec(f.dtype, format)} for f in dtype.fields
-            ],
-        }
-    msg = f"decode() does not support dtype {dtype}"
-    raise TypeError(msg)
+    return _call_plugin("sexp_decode", expr, dtype=dtype_spec(dtype, format))
 
 
 @pl.api.register_expr_namespace("sexp")
 class SexpNamespace:
-    """``pl.col("x").sexp.to_json()`` and friends."""
-
     def __init__(self, expr: pl.Expr) -> None:
         self._expr = expr
 
@@ -158,8 +54,8 @@ class SexpNamespace:
     def is_valid(self) -> pl.Expr:
         return is_valid(self._expr)
 
-    def get(self, *path: str) -> pl.Expr:
-        return get(self._expr, *path)
+    def get(self, key: str, *nested_keys: str) -> pl.Expr:
+        return get(self._expr, key, *nested_keys)
 
     def decode(self, dtype: PolarsDataType, *, format: str | None = None) -> pl.Expr:
         return decode(self._expr, dtype, format=format)
