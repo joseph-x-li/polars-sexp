@@ -1,4 +1,4 @@
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use polars::prelude::TimeUnit;
 use serde::Deserialize;
 
@@ -44,7 +44,12 @@ impl Unit {
 }
 
 pub fn parse_days_since_epoch(s: &str, format: Option<&str>) -> Option<i32> {
-    let date = NaiveDate::parse_from_str(s, format.unwrap_or(ISO_DATE)).ok()?;
+    let date = match format {
+        None => NaiveDate::parse_from_str(s, ISO_DATE).ok()?,
+        Some(fmt) => NaiveDate::parse_from_str(s, fmt)
+            .or_else(|_| NaiveDateTime::parse_from_str(s, fmt).map(|dt| dt.date()))
+            .ok()?,
+    };
     let epoch = DateTime::UNIX_EPOCH.date_naive();
     i32::try_from((date - epoch).num_days()).ok()
 }
@@ -60,6 +65,10 @@ fn parse_datetime(s: &str, format: Option<&str>) -> Option<ParsedDatetime> {
         return DateTime::parse_from_str(s, fmt)
             .map(instant)
             .or_else(|_| NaiveDateTime::parse_from_str(s, fmt).map(ParsedDatetime::WallClock))
+            .or_else(|_| {
+                NaiveDate::parse_from_str(s, fmt)
+                    .map(|d| ParsedDatetime::WallClock(d.and_time(NaiveTime::MIN)))
+            })
             .ok();
     }
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
@@ -79,7 +88,7 @@ fn parse_datetime(s: &str, format: Option<&str>) -> Option<ParsedDatetime> {
     }
     let midnight = NaiveDate::parse_from_str(s, ISO_DATE)
         .ok()?
-        .and_hms_opt(0, 0, 0)?;
+        .and_time(NaiveTime::MIN);
     Some(ParsedDatetime::WallClock(midnight))
 }
 
@@ -152,7 +161,7 @@ fn exact_decimal_product(decimal: &str, factor: i128) -> Option<i128> {
     let mut place = factor;
     for digit in frac.chars() {
         place /= 10;
-        product += i128::from(digit.to_digit(10)?) * place;
+        product = product.checked_add(i128::from(digit.to_digit(10)?) * place)?;
     }
     Some(product)
 }
@@ -221,5 +230,11 @@ mod tests {
     fn fractional_durations_are_exact() {
         assert_eq!(parse_duration("0.3s", Unit::Ns), Some(300_000_000));
         assert_eq!(parse_duration("-1d0.5h", Unit::Ms), Some(-88_200_000));
+    }
+
+    #[test]
+    fn fraction_that_tips_the_total_past_i128_is_null() {
+        let whole_us = (i128::MAX / NS_PER_US).to_string();
+        assert_eq!(parse_duration(&format!("{whole_us}.999us"), Unit::Ns), None);
     }
 }

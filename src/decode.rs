@@ -152,7 +152,10 @@ fn decode_list(
     vals: &[Option<Value>],
     inner: &DtypeSpec,
 ) -> PolarsResult<Series> {
-    let rows: Vec<Option<&[_]>> = vals.iter().map(|v| v.and_then(|v| v.as_items())).collect();
+    let rows: Vec<Option<&[_]>> = vals
+        .iter()
+        .map(|v| v.and_then(|v| v.as_list_elements()))
+        .collect();
     let children: Vec<Option<Value>> = rows
         .iter()
         .flatten()
