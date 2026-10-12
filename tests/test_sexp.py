@@ -1,7 +1,9 @@
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 
 import polars as pl
 import polars_sexp
+import pytest
 
 
 def test_invalid_input_is_null_in_every_function():
@@ -87,3 +89,56 @@ def test_array_rows_of_the_wrong_width_are_null():
         [None, None],
         [[1, 2, 3], [4, 5, 6]],
     ]
+
+
+def test_encode_then_decode_round_trips_every_dtype_with_nulls_at_every_level():
+    df = pl.DataFrame(
+        {
+            "text": ["has space", "", None],
+            "tags": [["a"], [None, "b"], None],
+            "points": [[{"x": 1}, None], [], None],
+            "dims": [{"w": 1.5, "h": None}, None, {"w": float("nan"), "h": 1e300}],
+            "at": [datetime(1969, 12, 31, 23, 59, 59, 1), datetime(2026, 1, 1), None],
+            "took": [timedelta(microseconds=-1), None, timedelta(days=2)],
+            "clock": [time(0, 0, 0, 500), None, time(23, 59)],
+            "day": [date(1900, 1, 1), None, date(2026, 10, 12)],
+            "flag": [True, None, False],
+        }
+    ).with_columns(
+        zoned=pl.col("at").dt.replace_time_zone("Asia/Kolkata"),
+        price=pl.Series([Decimal("1.50"), None, Decimal("-3.25")], dtype=pl.Decimal(10, 2)),
+        size=pl.Series(["s", "m", None], dtype=pl.Enum(["s", "m"])),
+        huge=pl.Series([2**100, None, -1], dtype=pl.Int128),
+        pair=pl.Series([[1, None], None, [3, 4]], dtype=pl.Array(pl.Int8, 2)),
+    )
+    encoded = df.select(s=pl.struct(pl.all()).sexp.encode())
+    decoded = encoded.select(pl.col("s").sexp.decode(pl.Struct(df.schema))).unnest("s")
+    assert decoded.equals(df)
+
+
+def test_tagged_payloads_can_be_positional_or_keyed():
+    variants = {"circle": pl.Float64, "rect": pl.Struct({"w": pl.Int8, "h": pl.Int8})}
+    shapes = pl.Series(["(circle 3)", "(rect 2 4)", "(rect (h 4))", "(rect (2 4))", "(blob 1)"])
+    assert shapes.sexp.decode_tagged(variants).to_list() == [
+        {"tag": "circle", "circle": 3.0, "rect": None},
+        {"tag": "rect", "circle": None, "rect": {"w": 2, "h": 4}},
+        {"tag": "rect", "circle": None, "rect": {"w": None, "h": 4}},
+        {"tag": "rect", "circle": None, "rect": {"w": None, "h": None}},
+        None,
+    ]
+
+
+def test_strict_raises_on_mismatch_but_not_on_missing_fields():
+    dtype = pl.Struct({"a": pl.Int8, "b": pl.Int8})
+    assert pl.Series(["((a 1))"]).sexp.decode(dtype, strict=True).to_list() == [{"a": 1, "b": None}]
+    with pytest.raises(pl.exceptions.ComputeError, match="300"):
+        pl.Series(["((a 300))"]).sexp.decode(dtype, strict=True)
+    with pytest.raises(pl.exceptions.ComputeError, match="unclosed"):
+        pl.Series(["((a 1)"]).sexp.decode(dtype, strict=True)
+
+
+def test_inference_reads_empty_lists_as_null_and_one_atom_fields_as_lists():
+    rows = pl.Series(["((n (1 ())) (tags a))", "((tags a b) (n ()))", "((huge 99999999999999999999))"])
+    assert rows.sexp.infer_dtype() == pl.Struct(
+        {"n": pl.List(pl.Int64), "tags": pl.List(pl.String), "huge": pl.Int128}
+    )
