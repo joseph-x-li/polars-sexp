@@ -60,24 +60,33 @@ fn record_keys(items: &[Sexp]) -> Option<Vec<&str>> {
     (!keys.is_empty()).then_some(keys)
 }
 
+const MAX_INFERRED_NESTING: usize = 64;
+
 pub fn of_value(value: Value) -> Shape {
+    of_value_within(value, MAX_INFERRED_NESTING)
+}
+
+fn of_value_within(value: Value, nesting_left: usize) -> Shape {
     if let Some(atom) = value.as_atom() {
         return of_atom(atom);
     }
+    let Some(nesting_left) = nesting_left.checked_sub(1) else {
+        return Shape::Text;
+    };
     let items = value.as_items().unwrap_or_default();
     match record_keys(items) {
         Some(keys) => Shape::Record(
             keys.into_iter()
                 .map(|k| {
                     let field = value.record_field(k).expect("key came from this record");
-                    (k.to_string(), of_value(field))
+                    (k.to_string(), of_value_within(field, nesting_left))
                 })
                 .collect(),
         ),
         None => Shape::List(Box::new(
             items
                 .iter()
-                .map(|c| of_value(Value::Node(c)))
+                .map(|c| of_value_within(Value::Node(c), nesting_left))
                 .fold(Shape::Unknown, merge),
         )),
     }
@@ -145,5 +154,25 @@ impl Shape {
                     .collect(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse::parse_exactly_one;
+
+    fn depth(shape: &Shape) -> usize {
+        match shape {
+            Shape::List(inner) => 1 + depth(inner),
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn nesting_past_the_inference_limit_becomes_text() {
+        let deep = "(".repeat(1000) + &")".repeat(1000);
+        let sexp = parse_exactly_one(&deep).unwrap();
+        assert_eq!(depth(&of_value(Value::Node(&sexp))), MAX_INFERRED_NESTING);
     }
 }

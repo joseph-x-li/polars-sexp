@@ -97,6 +97,7 @@ def test_encode_then_decode_round_trips_every_dtype_with_nulls_at_every_level():
             "text": ["has space", "", None],
             "tags": [["a"], [None, "b"], None],
             "points": [[{"x": 1}, None], [], None],
+            "blank": [{"w": None}, None, {"w": 1}],
             "dims": [{"w": 1.5, "h": None}, None, {"w": float("nan"), "h": 1e300}],
             "at": [datetime(1969, 12, 31, 23, 59, 59, 1), datetime(2026, 1, 1), None],
             "took": [timedelta(microseconds=-1), None, timedelta(days=2)],
@@ -110,6 +111,8 @@ def test_encode_then_decode_round_trips_every_dtype_with_nulls_at_every_level():
         size=pl.Series(["s", "m", None], dtype=pl.Enum(["s", "m"])),
         huge=pl.Series([2**100, None, -1], dtype=pl.Int128),
         pair=pl.Series([[1, None], None, [3, 4]], dtype=pl.Array(pl.Int8, 2)),
+        clocks=pl.Series([[time(1, 2, 3, 4)], None, []], dtype=pl.List(pl.Time)),
+        costs=pl.Series([[Decimal("1.25"), None], [], None], dtype=pl.List(pl.Decimal(5, 2))),
     )
     encoded = df.select(s=pl.struct(pl.all()).sexp.encode())
     decoded = encoded.select(pl.col("s").sexp.decode(pl.Struct(df.schema))).unnest("s")

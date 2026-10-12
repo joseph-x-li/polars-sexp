@@ -1,10 +1,15 @@
 use polars::prelude::*;
+use pyo3_polars::export::polars_arrow::array::Array;
 
 use crate::sexp::Sexp;
 use crate::temporal::{self, Unit};
 
 fn atoms(texts: impl Iterator<Item = Option<String>>) -> Vec<Option<Sexp>> {
     texts.map(|t| t.map(Sexp::Atom)).collect()
+}
+
+fn nil() -> Sexp {
+    Sexp::List(Vec::new())
 }
 
 fn entry(key: &str, value: Sexp) -> Sexp {
@@ -48,20 +53,22 @@ pub fn encode(s: &Series) -> PolarsResult<Vec<Option<Sexp>>> {
         ),
         DataType::Array(inner, _) => encode(&s.cast(&DataType::List(inner.clone()))?)?,
         DataType::List(_) => {
-            let ca = s.list()?;
-            (0..ca.len())
-                .map(|i| {
-                    let row = match ca.get_as_series(i) {
-                        Some(row) => row,
-                        None => return Ok(None),
-                    };
-                    let items = encode(&row)?
-                        .into_iter()
-                        .map(|item| item.unwrap_or(Sexp::List(Vec::new())))
-                        .collect();
-                    Ok(Some(Sexp::List(items)))
+            let ca = s.list()?.rechunk();
+            let elements = encode(&ca.get_inner())?;
+            let arr = ca.downcast_as_array();
+            (0..arr.len())
+                .map(|row| {
+                    arr.is_valid(row).then(|| {
+                        let (start, end) = arr.offsets().start_end(row);
+                        Sexp::List(
+                            elements[start..end]
+                                .iter()
+                                .map(|e| e.clone().unwrap_or_else(nil))
+                                .collect(),
+                        )
+                    })
                 })
-                .collect::<PolarsResult<_>>()?
+                .collect()
         }
         DataType::Struct(_) => {
             let ca = s.struct_()?;
@@ -76,14 +83,17 @@ pub fn encode(s: &Series) -> PolarsResult<Vec<Option<Sexp>>> {
                     if is_null.get(row) == Some(true) {
                         return None;
                     }
-                    let entries = fields
+                    let entries: Vec<Sexp> = fields
                         .iter()
                         .zip(&encoded_fields)
                         .filter_map(|(field, values)| {
                             Some(entry(field.name(), values[row].clone()?))
                         })
                         .collect();
-                    Some(Sexp::List(entries))
+                    Some(match (entries.is_empty(), fields.first()) {
+                        (true, Some(first)) => Sexp::List(vec![entry(first.name(), nil())]),
+                        _ => Sexp::List(entries),
+                    })
                 })
                 .collect()
         }
