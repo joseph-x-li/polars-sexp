@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::sexp::{is_delimiter, Sexp};
 
 const MAX_NESTING_DEPTH: usize = 1024;
@@ -8,7 +10,7 @@ pub struct ParseError {
     pub msg: &'static str,
 }
 
-pub fn parse_exactly_one(input: &str) -> Result<Sexp, ParseError> {
+pub fn parse_exactly_one(input: &str) -> Result<Sexp<'_>, ParseError> {
     let mut p = Parser {
         src: input.as_bytes(),
         pos: 0,
@@ -28,7 +30,7 @@ struct Parser<'a> {
     depth: usize,
 }
 
-impl Parser<'_> {
+impl<'a> Parser<'a> {
     fn err(&self, msg: &'static str) -> ParseError {
         ParseError { pos: self.pos, msg }
     }
@@ -56,7 +58,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_sexp(&mut self) -> Result<Sexp, ParseError> {
+    fn parse_sexp(&mut self) -> Result<Sexp<'a>, ParseError> {
         self.skip_whitespace_and_comments();
         match self.peek() {
             None => Err(self.err("unexpected end of input")),
@@ -67,7 +69,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_list(&mut self) -> Result<Sexp, ParseError> {
+    fn parse_list(&mut self) -> Result<Sexp<'a>, ParseError> {
         if self.depth == MAX_NESTING_DEPTH {
             return Err(self.err("lists nested too deeply"));
         }
@@ -88,9 +90,20 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_string(&mut self) -> Result<Sexp, ParseError> {
+    fn parse_string(&mut self) -> Result<Sexp<'a>, ParseError> {
         self.consume(b'"');
-        let mut out = Vec::new();
+        let start = self.pos;
+        let rest = &self.src[start..];
+        let Some(len) = rest.iter().position(|&c| c == b'"' || c == b'\\') else {
+            self.pos = self.src.len();
+            return Err(self.err("unterminated string"));
+        };
+        self.pos += len;
+        if rest[len] == b'"' {
+            self.consume(b'"');
+            return Ok(Sexp::Atom(Cow::Borrowed(self.text(start, start + len))));
+        }
+        let mut out = rest[..len].to_vec();
         loop {
             match self.peek() {
                 None => return Err(self.err("unterminated string")),
@@ -98,7 +111,7 @@ impl Parser<'_> {
                     self.consume(b'"');
                     let text = String::from_utf8(out)
                         .expect("UTF-8 input split only at ASCII quotes stays UTF-8");
-                    return Ok(Sexp::Atom(text));
+                    return Ok(Sexp::Atom(Cow::Owned(text)));
                 }
                 Some(b'\\') => {
                     self.consume(b'\\');
@@ -119,14 +132,17 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_symbol(&mut self) -> Sexp {
+    fn parse_symbol(&mut self) -> Sexp<'a> {
         let start = self.pos;
         while self.peek().is_some_and(|c| !is_delimiter(c)) {
             self.pos += 1;
         }
-        let text = std::str::from_utf8(&self.src[start..self.pos])
-            .expect("UTF-8 input split only at ASCII delimiters stays UTF-8");
-        Sexp::Atom(text.to_string())
+        Sexp::Atom(Cow::Borrowed(self.text(start, self.pos)))
+    }
+
+    fn text(&self, start: usize, end: usize) -> &'a str {
+        std::str::from_utf8(&self.src[start..end])
+            .expect("UTF-8 input split only at ASCII delimiters stays UTF-8")
     }
 }
 
@@ -134,11 +150,11 @@ impl Parser<'_> {
 mod tests {
     use super::*;
 
-    fn atom(s: &str) -> Sexp {
-        Sexp::Atom(s.to_string())
+    fn atom(s: &str) -> Sexp<'_> {
+        Sexp::Atom(s.into())
     }
 
-    fn list(items: &[Sexp]) -> Sexp {
+    fn list<'a>(items: &[Sexp<'a>]) -> Sexp<'a> {
         Sexp::List(items.to_vec())
     }
 

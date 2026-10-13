@@ -9,18 +9,16 @@ use crate::parse::parse_exactly_one;
 use crate::record::Value;
 use crate::sexp::Sexp;
 
-fn parse_each_or_null(ca: &StringChunked) -> Vec<Option<Sexp>> {
+fn parse_each_or_null(ca: &StringChunked) -> impl Iterator<Item = Option<Sexp<'_>>> {
     ca.iter()
         .map(|opt| opt.and_then(|v| parse_exactly_one(v).ok()))
-        .collect()
 }
 
 #[polars_expr(output_type=String)]
 fn sexp_to_json(inputs: &[Series]) -> PolarsResult<Series> {
     let ca = inputs[0].str()?;
     let out: StringChunked = parse_each_or_null(ca)
-        .iter()
-        .map(|parsed| Some(parsed.as_ref()?.to_json().to_string()))
+        .map(|parsed| serde_json::to_string(&parsed?).ok())
         .collect();
     Ok(out.with_name(ca.name().clone()).into_series())
 }
@@ -42,9 +40,9 @@ struct GetKwargs {
 fn sexp_get(inputs: &[Series], kwargs: GetKwargs) -> PolarsResult<Series> {
     let ca = inputs[0].str()?;
     let out: StringChunked = parse_each_or_null(ca)
-        .iter()
         .map(|parsed| {
-            let mut value = Value::Node(parsed.as_ref()?);
+            let parsed = parsed?;
+            let mut value = Value::Node(&parsed);
             for key in &kwargs.path {
                 value = value.record_field(key)?;
             }
@@ -75,7 +73,7 @@ fn sexp_decode(inputs: &[Series], kwargs: DecodeKwargs) -> PolarsResult<Series> 
             .map(|opt| opt.map(parse_or_explain).transpose())
             .collect::<PolarsResult<_>>()?
     } else {
-        parse_each_or_null(ca)
+        parse_each_or_null(ca).collect()
     };
     let vals: Vec<Option<Value>> = parsed.iter().map(|p| p.as_ref().map(Value::Node)).collect();
     let decoder = Decoder {
@@ -84,7 +82,7 @@ fn sexp_decode(inputs: &[Series], kwargs: DecodeKwargs) -> PolarsResult<Series> 
     decoder.decode(ca.name().clone(), &vals, &kwargs.dtype)
 }
 
-fn parse_or_explain(text: &str) -> PolarsResult<Sexp> {
+fn parse_or_explain(text: &str) -> PolarsResult<Sexp<'_>> {
     parse_exactly_one(text).map_err(|e| {
         polars_err!(ComputeError: "invalid S-expression at byte {}: {} in `{}`", e.pos, e.msg, text)
     })
@@ -99,9 +97,8 @@ fn sexp_encode(inputs: &[Series]) -> PolarsResult<Series> {
 fn sexp_infer_dtype(inputs: &[Series]) -> PolarsResult<Series> {
     let ca = inputs[0].str()?;
     let shape = parse_each_or_null(ca)
-        .iter()
         .flatten()
-        .map(|sexp| infer::of_value(Value::Node(sexp)))
+        .map(|sexp| infer::of_value(Value::Node(&sexp)))
         .fold(infer::Shape::Unknown, infer::merge);
     let spec =
         serde_json::to_string(&shape.spec()).map_err(|e| polars_err!(ComputeError: "{}", e))?;

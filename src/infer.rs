@@ -45,19 +45,19 @@ fn of_atom(atom: &str) -> Shape {
     }
 }
 
-fn record_keys(items: &[Sexp]) -> Option<Vec<&str>> {
-    let mut keys: Vec<&str> = Vec::with_capacity(items.len());
+fn record_fields<'a>(items: &'a [Sexp<'a>]) -> Option<Vec<(&'a str, Value<'a>)>> {
+    let mut fields: Vec<(&str, Value)> = Vec::with_capacity(items.len());
     for item in items {
         let Sexp::List(entry) = item else { return None };
-        let Some(Sexp::Atom(key)) = entry.first() else {
+        let Some((Sexp::Atom(key), values)) = entry.split_first() else {
             return None;
         };
-        if of_atom(key) != Shape::Text || keys.contains(&key.as_str()) {
+        if of_atom(key) != Shape::Text || fields.iter().any(|(k, _)| k == key) {
             return None;
         }
-        keys.push(key);
+        fields.push((key, Value::FieldValues(values)));
     }
-    (!keys.is_empty()).then_some(keys)
+    (!fields.is_empty()).then_some(fields)
 }
 
 const MAX_INFERRED_NESTING: usize = 64;
@@ -74,13 +74,11 @@ fn of_value_within(value: Value, nesting_left: usize) -> Shape {
         return Shape::Text;
     };
     let items = value.as_items().unwrap_or_default();
-    match record_keys(items) {
-        Some(keys) => Shape::Record(
-            keys.into_iter()
-                .map(|k| {
-                    let field = value.record_field(k).expect("key came from this record");
-                    (k.to_string(), of_value_within(field, nesting_left))
-                })
+    match record_fields(items) {
+        Some(fields) => Shape::Record(
+            fields
+                .into_iter()
+                .map(|(k, field)| (k.to_string(), of_value_within(field, nesting_left)))
                 .collect(),
         ),
         None => Shape::List(Box::new(

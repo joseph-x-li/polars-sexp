@@ -1,41 +1,44 @@
+use std::borrow::Cow;
 use std::fmt;
 
-use serde_json::Value as Json;
+use serde::ser::{Serialize, Serializer};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Sexp {
-    Atom(String),
-    List(Vec<Sexp>),
+pub enum Sexp<'a> {
+    Atom(Cow<'a, str>),
+    List(Vec<Sexp<'a>>),
 }
 
-impl Sexp {
-    pub fn to_json(&self) -> Json {
+impl Serialize for Sexp<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Sexp::Atom(s) => Json::String(s.clone()),
-            Sexp::List(items) => Json::Array(items.iter().map(Sexp::to_json).collect()),
+            Sexp::Atom(s) => serializer.serialize_str(s),
+            Sexp::List(items) => serializer.collect_seq(items),
         }
     }
 }
 
-impl Sexp {
+impl Sexp<'_> {
     pub fn push_to(&self, out: &mut String) {
         match self {
             Sexp::Atom(s) => push_atom(out, s),
-            Sexp::List(items) => {
-                out.push('(');
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push(' ');
-                    }
-                    item.push_to(out);
-                }
-                out.push(')');
-            }
+            Sexp::List(items) => push_list(out, items),
         }
     }
 }
 
-impl fmt::Display for Sexp {
+pub fn push_list(out: &mut String, items: &[Sexp]) {
+    out.push('(');
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        item.push_to(out);
+    }
+    out.push(')');
+}
+
+impl fmt::Display for Sexp<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut text = String::new();
         self.push_to(&mut text);
