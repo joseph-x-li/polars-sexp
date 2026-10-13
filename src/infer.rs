@@ -35,6 +35,13 @@ fn of_atom(atom: &str) -> Shape {
     if starts_like_a_number && atom.parse::<f64>().is_ok() {
         return Shape::Float;
     }
+    let starts_like_an_iso_year = atom
+        .trim_start()
+        .trim_start_matches(['-', '+'])
+        .starts_with(|c: char| c.is_ascii_digit());
+    if !starts_like_an_iso_year {
+        return Shape::Text;
+    }
     if temporal::parse_days_since_epoch(atom, None).is_some() {
         return Shape::Date;
     }
@@ -93,7 +100,9 @@ fn of_value_within(value: Value, nesting_left: usize) -> Shape {
 fn merge_records(mut left: Vec<(String, Shape)>, right: Vec<(String, Shape)>) -> Shape {
     for (key, shape) in right {
         match left.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, existing)) => *existing = merge(existing.clone(), shape),
+            Some((_, existing)) => {
+                *existing = merge(std::mem::replace(existing, Shape::Unknown), shape)
+            }
             None => left.push((key, shape)),
         }
     }

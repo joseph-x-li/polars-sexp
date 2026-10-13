@@ -2,7 +2,7 @@ use polars::chunked_array::builder::get_list_builder;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::record::{field_in, Value};
+use crate::record::Value;
 use crate::sexp::Sexp;
 use crate::temporal::{self, Unit};
 
@@ -128,15 +128,60 @@ fn assemble_struct<T>(
     )
 }
 
-fn is_keyed_payload(payload: &[Sexp], fields: &[FieldSpec]) -> bool {
-    !payload.is_empty()
-        && payload.iter().all(|item| match item {
-            Sexp::List(entry) => match entry.first() {
-                Some(Sexp::Atom(key)) => fields.iter().any(|f| &f.name == key),
-                _ => false,
-            },
-            Sexp::Atom(_) => false,
-        })
+struct FieldColumns<'f, 'a> {
+    fields: &'f [FieldSpec],
+    positions: PlHashMap<&'f str, usize>,
+    columns: Vec<Vec<Option<Value<'a>>>>,
+}
+
+impl<'f, 'a> FieldColumns<'f, 'a> {
+    fn new(fields: &'f [FieldSpec], rows: usize) -> Self {
+        FieldColumns {
+            fields,
+            positions: fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.name.as_str(), i))
+                .collect(),
+            columns: vec![vec![None; rows]; fields.len()],
+        }
+    }
+
+    fn position_of_key(&self, entry: &'a Sexp<'a>) -> Option<(usize, &'a [Sexp<'a>])> {
+        let Sexp::List(entry) = entry else {
+            return None;
+        };
+        match entry.split_first()? {
+            (Sexp::Atom(key), values) => Some((*self.positions.get(key.as_ref())?, values)),
+            (Sexp::List(_), _) => None,
+        }
+    }
+
+    fn is_keyed(&self, payload: &'a [Sexp<'a>]) -> bool {
+        !payload.is_empty() && payload.iter().all(|e| self.position_of_key(e).is_some())
+    }
+
+    fn fill_keyed(&mut self, row: usize, entries: &'a [Sexp<'a>]) {
+        for entry in entries {
+            if let Some((position, values)) = self.position_of_key(entry) {
+                self.columns[position][row].get_or_insert(Value::FieldValues(values));
+            }
+        }
+    }
+
+    fn fill_positional(&mut self, row: usize, items: &'a [Sexp<'a>]) {
+        for (column, item) in self.columns.iter_mut().zip(items) {
+            column[row] = Some(Value::Node(item));
+        }
+    }
+
+    fn decode(self, decoder: &Decoder) -> PolarsResult<Vec<Series>> {
+        self.fields
+            .iter()
+            .zip(self.columns)
+            .map(|(f, vals)| decoder.decode(f.name.as_str().into(), &vals, &f.dtype))
+            .collect()
+    }
 }
 
 impl Decoder {
@@ -301,19 +346,15 @@ impl Decoder {
         fields: &[FieldSpec],
     ) -> PolarsResult<Series> {
         let records = self.present_or_mismatch(vals, dtype, |v| {
-            v.as_items().filter(|items| !items.is_empty()).map(|_| v)
+            v.as_items().filter(|items| !items.is_empty())
         })?;
-        let field_series = fields
-            .iter()
-            .map(|f| {
-                let field_vals: Vec<Option<Value>> = records
-                    .iter()
-                    .map(|r| r.and_then(|r| r.record_field(&f.name)))
-                    .collect();
-                self.decode(f.name.as_str().into(), &field_vals, &f.dtype)
-            })
-            .collect::<PolarsResult<Vec<_>>>()?;
-        assemble_struct(name, &field_series, &records)
+        let mut columns = FieldColumns::new(fields, records.len());
+        for (row, entries) in records.iter().enumerate() {
+            if let Some(entries) = entries {
+                columns.fill_keyed(row, entries);
+            }
+        }
+        assemble_struct(name, &columns.decode(self)?, &records)
     }
 
     fn decode_tagged<'a>(
@@ -357,6 +398,7 @@ impl Decoder {
             return self.decode(name.into(), &vals, spec);
         };
         let dtype = spec.dtype()?;
+        let mut columns = FieldColumns::new(fields, payloads.len());
         let payloads = self.present_or_mismatch(
             &payloads
                 .iter()
@@ -365,28 +407,18 @@ impl Decoder {
             &dtype,
             |v| {
                 let payload = v.as_field_values()?;
-                let positional_fits = payload.len() <= fields.len();
-                (is_keyed_payload(payload, fields) || positional_fits).then_some(payload)
+                let keyed = columns.is_keyed(payload);
+                (keyed || payload.len() <= fields.len()).then_some((payload, keyed))
             },
         )?;
-        let field_series = fields
-            .iter()
-            .enumerate()
-            .map(|(position, f)| {
-                let field_vals: Vec<Option<Value>> = payloads
-                    .iter()
-                    .map(|p| {
-                        let payload = (*p)?;
-                        if is_keyed_payload(payload, fields) {
-                            field_in(payload, &f.name)
-                        } else {
-                            payload.get(position).map(Value::Node)
-                        }
-                    })
-                    .collect();
-                self.decode(f.name.as_str().into(), &field_vals, &f.dtype)
-            })
-            .collect::<PolarsResult<Vec<_>>>()?;
+        for (row, payload) in payloads.iter().enumerate() {
+            match *payload {
+                Some((entries, true)) => columns.fill_keyed(row, entries),
+                Some((items, false)) => columns.fill_positional(row, items),
+                None => {}
+            }
+        }
+        let field_series = columns.decode(self)?;
         assemble_struct(&name.into(), &field_series, &payloads)
     }
 }

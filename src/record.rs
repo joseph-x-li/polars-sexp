@@ -11,7 +11,7 @@ enum Shape<'a> {
     Several(&'a [Sexp<'a>]),
 }
 
-pub fn field_in<'a>(entries: &'a [Sexp<'a>], key: &str) -> Option<Value<'a>> {
+fn field_in<'a>(entries: &'a [Sexp<'a>], key: &str) -> Option<Value<'a>> {
     entries.iter().find_map(|item| match item {
         Sexp::List(entry) => match entry.split_first() {
             Some((Sexp::Atom(k), values)) if k == key => Some(Value::FieldValues(values)),
