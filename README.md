@@ -108,17 +108,4 @@ pytest                      # Python tests
 cargo test                  # Rust parser unit tests
 ```
 
-Layout:
-
-- `src/sexp.rs`: the `Sexp` type and its canonical text form.
-- `src/parse.rs`: the parser (pure Rust, no Polars).
-- `src/record.rs`: record field lookup over `((key value) ...)`.
-- `src/temporal.rs`: date, datetime and duration parsing.
-- `src/decode.rs`: decoding parsed sexps into Polars dtypes.
-- `src/encode.rs`: writing Polars columns as sexps.
-- `src/infer.rs`: inferring a dtype from parsed sexps.
-- `src/expressions.rs`: `#[polars_expr]` functions that Polars calls.
-- `python/polars_sexp/__init__.py`: Python wrappers and the `.sexp` namespace.
-- `python/polars_sexp/_dtype_spec.py`: describes a Polars dtype for the Rust side.
-
 The code has no comments: names and types carry intent, and each non-obvious edge case is a test.
