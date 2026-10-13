@@ -92,11 +92,7 @@ fn parse_or_explain(text: &str) -> PolarsResult<Sexp> {
 
 #[polars_expr(output_type=String)]
 fn sexp_encode(inputs: &[Series]) -> PolarsResult<Series> {
-    let out: StringChunked = encode(&inputs[0])?
-        .into_iter()
-        .map(|sexp| sexp.map(|s| s.to_string()))
-        .collect();
-    Ok(out.with_name(inputs[0].name().clone()).into_series())
+    Ok(encode(&inputs[0])?.into_series())
 }
 
 #[polars_expr(output_type=String)]

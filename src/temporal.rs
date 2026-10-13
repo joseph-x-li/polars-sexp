@@ -102,43 +102,133 @@ pub fn classify_datetime(s: &str) -> Option<DatetimeKind> {
     })
 }
 
-pub fn format_date(days_since_epoch: i32) -> Option<String> {
-    let date = DateTime::UNIX_EPOCH
-        .date_naive()
-        .checked_add_signed(chrono::TimeDelta::try_days(days_since_epoch.into())?)?;
-    Some(date.format(ISO_DATE).to_string())
+const SECONDS_PER_DAY: i64 = 86_400;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
+const FOUR_DIGIT_YEARS: std::ops::RangeInclusive<i64> = 0..=9999;
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let days = days_since_epoch + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month as u32, day as u32)
 }
 
-pub fn format_timestamp(
+fn push_padded(out: &mut String, n: u64, width: usize) {
+    let mut digits = itoa::Buffer::new();
+    let digits = digits.format(n);
+    for _ in digits.len()..width {
+        out.push('0');
+    }
+    out.push_str(digits);
+}
+
+fn push_date_of(out: &mut String, days_since_epoch: i64) -> Option<()> {
+    let (year, month, day) = civil_from_days(days_since_epoch);
+    if !FOUR_DIGIT_YEARS.contains(&year) {
+        let epoch = DateTime::UNIX_EPOCH.date_naive();
+        let date = epoch.checked_add_signed(chrono::TimeDelta::try_days(days_since_epoch)?)?;
+        out.push_str(&date.format(ISO_DATE).to_string());
+        return Some(());
+    }
+    push_padded(out, year as u64, 4);
+    out.push('-');
+    push_padded(out, month.into(), 2);
+    out.push('-');
+    push_padded(out, day.into(), 2);
+    Some(())
+}
+
+fn push_time_of_day(out: &mut String, nanos_since_midnight: i64) {
+    let seconds = nanos_since_midnight / NANOS_PER_SECOND;
+    let nanos = (nanos_since_midnight % NANOS_PER_SECOND) as u64;
+    push_padded(out, (seconds / 3600) as u64, 2);
+    out.push(':');
+    push_padded(out, (seconds / 60 % 60) as u64, 2);
+    out.push(':');
+    push_padded(out, (seconds % 60) as u64, 2);
+    match nanos {
+        0 => {}
+        n if n % 1_000_000 == 0 => {
+            out.push('.');
+            push_padded(out, n / 1_000_000, 3);
+        }
+        n if n % 1_000 == 0 => {
+            out.push('.');
+            push_padded(out, n / 1_000, 6);
+        }
+        n => {
+            out.push('.');
+            push_padded(out, n, 9);
+        }
+    }
+}
+
+pub fn push_date(out: &mut String, days_since_epoch: i32) -> Option<()> {
+    push_date_of(out, days_since_epoch.into())
+}
+
+fn whole_minute_offset_seconds(zone: &chrono_tz::Tz, utc_seconds: i64) -> Option<i32> {
+    use chrono::Offset;
+    let utc = DateTime::from_timestamp(utc_seconds, 0)?.naive_utc();
+    let offset = zone.offset_from_utc_datetime(&utc).fix().local_minus_utc();
+    (offset % 60 == 0).then_some(offset)
+}
+
+pub fn push_timestamp(
+    out: &mut String,
     count_in_unit: i64,
     unit: Unit,
     zone: Option<&chrono_tz::Tz>,
-) -> Option<String> {
-    let instant = match unit {
-        Unit::Ns => DateTime::from_timestamp_nanos(count_in_unit),
-        Unit::Us => DateTime::from_timestamp_micros(count_in_unit)?,
-        Unit::Ms => DateTime::from_timestamp_millis(count_in_unit)?,
+) -> Option<()> {
+    let nanos = i128::from(count_in_unit) * unit.ns();
+    let utc_seconds = i64::try_from(nanos.div_euclid(NS_PER_S)).ok()?;
+    let subsecond_nanos = nanos.rem_euclid(NS_PER_S) as i64;
+    let offset_seconds = match zone {
+        Some(tz) => whole_minute_offset_seconds(tz, utc_seconds),
+        None => None,
     };
-    Some(match zone {
-        None => instant
-            .naive_utc()
-            .format("%Y-%m-%dT%H:%M:%S%.f")
-            .to_string(),
-        Some(tz) => instant
-            .with_timezone(tz)
-            .format("%Y-%m-%dT%H:%M:%S%.f%:z")
-            .to_string(),
-    })
+    let local_seconds = utc_seconds.checked_add(offset_seconds.unwrap_or(0).into())?;
+    push_date_of(out, local_seconds.div_euclid(SECONDS_PER_DAY))?;
+    out.push('T');
+    push_time_of_day(
+        out,
+        local_seconds.rem_euclid(SECONDS_PER_DAY) * NANOS_PER_SECOND + subsecond_nanos,
+    );
+    match (zone, offset_seconds) {
+        (None, _) => {}
+        (Some(_), None) => out.push('Z'),
+        (Some(_), Some(offset)) => {
+            out.push(if offset < 0 { '-' } else { '+' });
+            let minutes = u64::from(offset.unsigned_abs() / 60);
+            push_padded(out, minutes / 60, 2);
+            out.push(':');
+            push_padded(out, minutes % 60, 2);
+        }
+    }
+    Some(())
 }
 
-pub fn format_time(nanos_since_midnight: i64) -> String {
-    let since_midnight = chrono::TimeDelta::nanoseconds(nanos_since_midnight);
-    let time = NaiveTime::MIN.overflowing_add_signed(since_midnight).0;
-    time.format("%H:%M:%S%.f").to_string()
+pub fn push_time(out: &mut String, nanos_since_midnight: i64) {
+    push_time_of_day(
+        out,
+        nanos_since_midnight.rem_euclid(SECONDS_PER_DAY * NANOS_PER_SECOND),
+    );
 }
 
-pub fn format_duration(count_in_unit: i64, unit: Unit) -> String {
-    format!("{count_in_unit}{}", unit.suffix())
+pub fn push_duration(out: &mut String, count_in_unit: i64, unit: Unit) {
+    out.push_str(itoa::Buffer::new().format(count_in_unit));
+    out.push_str(unit.suffix());
 }
 
 enum ParsedDatetime {

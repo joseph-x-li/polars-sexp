@@ -107,6 +107,9 @@ def test_encode_then_decode_round_trips_every_dtype_with_nulls_at_every_level():
         }
     ).with_columns(
         zoned=pl.col("at").dt.replace_time_zone("Asia/Kolkata"),
+        local_mean_time=pl.Series([datetime(1890, 1, 1, 12), None, None]).dt.replace_time_zone(
+            "Europe/Paris"
+        ),
         price=pl.Series([Decimal("1.50"), None, Decimal("-3.25")], dtype=pl.Decimal(10, 2)),
         size=pl.Series(["s", "m", None], dtype=pl.Enum(["s", "m"])),
         huge=pl.Series([2**100, None, -1], dtype=pl.Int128),

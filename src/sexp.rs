@@ -17,47 +17,64 @@ impl Sexp {
     }
 }
 
-impl fmt::Display for Sexp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Sexp {
+    pub fn push_to(&self, out: &mut String) {
         match self {
-            Sexp::Atom(s) => write_atom_quoted_if_needed(f, s),
-            Sexp::List(items) => write_list(f, items),
+            Sexp::Atom(s) => push_atom(out, s),
+            Sexp::List(items) => {
+                out.push('(');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(' ');
+                    }
+                    item.push_to(out);
+                }
+                out.push(')');
+            }
         }
     }
 }
 
-pub(crate) fn is_delimiter(c: u8) -> bool {
+impl fmt::Display for Sexp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut text = String::new();
+        self.push_to(&mut text);
+        f.write_str(&text)
+    }
+}
+
+pub(crate) const fn is_delimiter(c: u8) -> bool {
     c.is_ascii_whitespace() || matches!(c, b'(' | b')' | b'"' | b';')
 }
 
-fn write_atom_quoted_if_needed(f: &mut fmt::Formatter<'_>, s: &str) -> fmt::Result {
-    let needs_quotes = s.is_empty() || s.bytes().any(is_delimiter);
-    if !needs_quotes {
-        return f.write_str(s);
+const IS_DELIMITER: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        table[byte] = is_delimiter(byte as u8);
+        byte += 1;
     }
-    f.write_str("\"")?;
+    table
+};
+
+pub fn push_atom(out: &mut String, s: &str) {
+    let needs_quotes = s.is_empty() || s.bytes().any(|b| IS_DELIMITER[usize::from(b)]);
+    if !needs_quotes {
+        out.push_str(s);
+        return;
+    }
+    out.push('"');
     for c in s.chars() {
         match c {
-            '"' => f.write_str("\\\"")?,
-            '\\' => f.write_str("\\\\")?,
-            '\n' => f.write_str("\\n")?,
-            '\t' => f.write_str("\\t")?,
-            '\r' => f.write_str("\\r")?,
-            c => write!(f, "{c}")?,
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
         }
     }
-    f.write_str("\"")
-}
-
-fn write_list(f: &mut fmt::Formatter<'_>, items: &[Sexp]) -> fmt::Result {
-    f.write_str("(")?;
-    for (i, item) in items.iter().enumerate() {
-        if i > 0 {
-            f.write_str(" ")?;
-        }
-        write!(f, "{item}")?;
-    }
-    f.write_str(")")
+    out.push('"');
 }
 
 #[cfg(test)]
