@@ -148,3 +148,9 @@ def test_inference_reads_empty_lists_as_null_and_one_atom_fields_as_lists():
     assert rows.sexp.infer_dtype() == pl.Struct(
         {"n": pl.List(pl.Int64), "tags": pl.List(pl.String), "huge": pl.Int128}
     )
+
+
+def test_first_of_repeated_keys_wins():
+    dtype = pl.Struct({"a": pl.Int64, "b": pl.Int64})
+    out = pl.select(pl.lit("((a 1) (b 2) (a 3))").sexp.decode(dtype)).item()
+    assert out == {"a": 1, "b": 2}
