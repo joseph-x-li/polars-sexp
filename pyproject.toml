@@ -8,12 +8,24 @@ version = "0.1.0"
 description = "Parse S-expressions in Polars"
 readme = "README.md"
 license = { file = "LICENSE" }
+authors = [{ name = "Joseph Li" }]
+keywords = ["polars", "s-expression", "sexp", "parser", "plugin"]
 requires-python = ">=3.9"
 dependencies = ["polars>=2.0"]
 classifiers = [
-  "Programming Language :: Rust",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Topic :: Text Processing :: General",
 ]
+
+[project.urls]
+Homepage = "https://github.com/joseph-x-li/polars-sexp"
+Repository = "https://github.com/joseph-x-li/polars-sexp"
+Issues = "https://github.com/joseph-x-li/polars-sexp/issues"
 
 [project.optional-dependencies]
 dev = ["pytest"]
