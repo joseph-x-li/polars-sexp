@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-10-23)
 
 - Fix a segfault on import on macOS. pyo3 0.29.3 made the Polars allocator recurse until the stack overflowed ([pola-rs/polars#29731](https://github.com/pola-rs/polars/issues/29731)), so the lockfile pins pyo3 0.29.2.
 - Require Python 3.10 or newer, matching Polars 2.0. Wheels are now built for `abi3-py310`.
