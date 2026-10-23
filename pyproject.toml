@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "polars-sexp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Parse S-expressions in Polars"
 readme = "README.md"
 license = { file = "LICENSE" }
