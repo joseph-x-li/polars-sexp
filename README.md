@@ -62,7 +62,7 @@ Syntax: `( … )` lists, bare symbols, `"double quoted"` strings with `\n \t \r 
 
 ## Development
 
-Requires Rust (stable) and Python ≥ 3.9.
+Requires Rust (stable) and Python ≥ 3.10.
 
 ```sh
 python -m venv .venv && source .venv/bin/activate

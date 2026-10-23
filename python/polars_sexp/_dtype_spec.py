@@ -74,7 +74,9 @@ def dtype_spec(dtype: PolarsDataType, format: str | None) -> dict[str, Any]:
     if isinstance(dtype, pl.Struct):
         return {
             "kind": "struct",
-            "fields": [{"name": f.name, "dtype": dtype_spec(f.dtype, format)} for f in dtype.fields],
+            "fields": [
+                {"name": f.name, "dtype": dtype_spec(f.dtype, format)} for f in dtype.fields
+            ],
         }
     msg = f"decode() does not support dtype {dtype}"
     raise TypeError(msg)

@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 import polars as pl
-import polars_sexp
+import polars_sexp  # noqa: F401  (registers the .sexp namespace)
 import pytest
 
 
@@ -144,7 +144,9 @@ def test_strict_raises_on_mismatch_but_not_on_missing_fields():
 
 
 def test_inference_reads_empty_lists_as_null_and_one_atom_fields_as_lists():
-    rows = pl.Series(["((n (1 ())) (tags a))", "((tags a b) (n ()))", "((huge 99999999999999999999))"])
+    rows = pl.Series(
+        ["((n (1 ())) (tags a))", "((tags a b) (n ()))", "((huge 99999999999999999999))"]
+    )
     assert rows.sexp.infer_dtype() == pl.Struct(
         {"n": pl.List(pl.Int64), "tags": pl.List(pl.String), "huge": pl.Int128}
     )
