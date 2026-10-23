@@ -60,9 +60,7 @@ def encode(expr: IntoExpr) -> pl.Expr:
 def decode(
     expr: IntoExpr, dtype: PolarsDataType, *, format: str | None = None, strict: bool = False
 ) -> pl.Expr:
-    decoded = _call_plugin(
-        "sexp_decode", expr, dtype=dtype_spec(dtype, format), strict=strict
-    )
+    decoded = _call_plugin("sexp_decode", expr, dtype=dtype_spec(dtype, format), strict=strict)
     return decoded.cast(dtype, strict=strict) if needs_polars_cast(dtype) else decoded
 
 
@@ -86,9 +84,7 @@ def decode_tagged(
         ],
     }
     target = pl.Struct({TAG_FIELD: pl.Enum(list(variants)), **variants})
-    return _call_plugin("sexp_decode", expr, dtype=spec, strict=strict).cast(
-        target, strict=strict
-    )
+    return _call_plugin("sexp_decode", expr, dtype=spec, strict=strict).cast(target, strict=strict)
 
 
 def infer_dtype(

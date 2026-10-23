@@ -4,23 +4,68 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.17.2"
+          args: check
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.17.2"
+          args: format --check
+
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }}, polars ${{ matrix.polars }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+        polars: [latest]
+        include:
+          - { os: ubuntu-latest, python: "3.13", polars: oldest }
+          - { os: ubuntu-latest, python: "3.13", polars: pre }
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - uses: Swatinem/rust-cache@v2
       - name: Rust tests
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13' && matrix.polars == 'latest'
         run: cargo test
-      - name: Build and test Python package
+      - name: Install Polars
         run: |
           python -m venv .venv
-          source .venv/bin/activate
-          pip install maturin polars pytest
+          source .venv/bin/activate 2>/dev/null || source .venv/Scripts/activate
+          case "${{ matrix.polars }}" in
+            oldest) pip install "polars==2.0.0" ;;
+            pre) pip install --pre --upgrade polars ;;
+            *) pip install polars ;;
+          esac
+          pip install maturin pytest
+      - name: Build and test Python package
+        run: |
+          source .venv/bin/activate 2>/dev/null || source .venv/Scripts/activate
           maturin develop
+          python -c "import polars; print('polars', polars.__version__)"
           pytest

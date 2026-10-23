@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
   workflow_dispatch:
 
 permissions:
@@ -17,9 +19,9 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-22.04, target: x86_64, manylinux: auto }
-          - { os: ubuntu-22.04, target: aarch64, manylinux: auto }
+          - { os: ubuntu-22.04-arm, target: aarch64, manylinux: auto }
           - { os: ubuntu-22.04, target: x86_64, manylinux: musllinux_1_2 }
-          - { os: ubuntu-22.04, target: aarch64, manylinux: musllinux_1_2 }
+          - { os: ubuntu-22.04-arm, target: aarch64, manylinux: musllinux_1_2 }
           - { os: macos-15-intel, target: x86_64 }
           - { os: macos-latest, target: aarch64 }
           - { os: windows-latest, target: x64 }
@@ -34,6 +36,20 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           args: --release --out dist
+      - name: Test wheel
+        if: matrix.manylinux != 'musllinux_1_2'
+        shell: bash
+        run: |
+          python -m venv .venv-test
+          source .venv-test/bin/activate 2>/dev/null || source .venv-test/Scripts/activate
+          pip install polars pytest
+          pip install --no-index --find-links dist polars-sexp
+          pytest
+      - name: Test wheel (musl)
+        if: matrix.manylinux == 'musllinux_1_2'
+        run: |
+          docker run --rm -v "$PWD":/io -w /io python:3.12-alpine sh -c \
+            "pip install polars pytest && pip install --no-index --find-links dist polars-sexp && pytest"
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
