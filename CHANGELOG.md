@@ -6,7 +6,7 @@
 - Shorter README with an install line.
 - CI tests Python 3.10 and 3.13 on Linux, macOS and Windows, against the oldest, newest and pre-release Polars, and runs weekly.
 - CI checks `cargo fmt`, `clippy` and `ruff`.
-- The release workflow installs and tests every wheel before publishing.
+- The release workflow installs and tests every wheel before publishing, and also runs (without publishing) on pull requests that change it.
 
 ## 0.1.0 (2026-10-16)
 
