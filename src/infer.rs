@@ -101,7 +101,7 @@ fn merge_records(mut left: Vec<(String, Shape)>, right: Vec<(String, Shape)>) ->
     for (key, shape) in right {
         match left.iter_mut().find(|(k, _)| *k == key) {
             Some((_, existing)) => {
-                *existing = merge(std::mem::replace(existing, Shape::Unknown), shape)
+                *existing = merge_field(std::mem::replace(existing, Shape::Unknown), shape)
             }
             None => left.push((key, shape)),
         }
@@ -110,6 +110,14 @@ fn merge_records(mut left: Vec<(String, Shape)>, right: Vec<(String, Shape)>) ->
 }
 
 pub fn merge(left: Shape, right: Shape) -> Shape {
+    merge_in(left, right, false)
+}
+
+fn merge_field(left: Shape, right: Shape) -> Shape {
+    merge_in(left, right, true)
+}
+
+fn merge_in(left: Shape, right: Shape, one_atom_is_a_list: bool) -> Shape {
     use Shape::*;
     match (left, right) {
         (Unknown, s) | (s, Unknown) => s,
@@ -127,7 +135,9 @@ pub fn merge(left: Shape, right: Shape) -> Shape {
         }
         (List(empty), scalar) | (scalar, List(empty)) if *empty == Unknown => scalar,
         (List(l), scalar @ (Boolean | Integer { .. } | Float | Date | Datetime { .. } | Text))
-        | (scalar @ (Boolean | Integer { .. } | Float | Date | Datetime { .. } | Text), List(l)) => {
+        | (scalar @ (Boolean | Integer { .. } | Float | Date | Datetime { .. } | Text), List(l))
+            if one_atom_is_a_list =>
+        {
             List(Box::new(merge(*l, scalar)))
         }
         _ => Text,
@@ -174,6 +184,23 @@ mod tests {
             Shape::List(inner) => 1 + depth(inner),
             _ => 0,
         }
+    }
+
+    fn infer(rows: &[&str]) -> Shape {
+        rows.iter()
+            .map(|row| of_value(Value::Node(&parse_exactly_one(row).unwrap())))
+            .fold(Shape::Unknown, merge)
+    }
+
+    #[test]
+    fn one_atom_reads_as_a_list_only_as_a_record_field_value() {
+        let strings = Shape::List(Box::new(Shape::Text));
+        assert_eq!(infer(&["a", "(a b)"]), Shape::Text);
+        assert_eq!(infer(&["((a) b)"]), Shape::List(Box::new(Shape::Text)));
+        assert_eq!(
+            infer(&["((tags a))", "((tags a b))"]),
+            Shape::Record(vec![("tags".into(), strings)])
+        );
     }
 
     #[test]

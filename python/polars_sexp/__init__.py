@@ -102,6 +102,18 @@ def infer_dtype(
     return dtype_from_spec(json.loads(spec.item()))
 
 
+def _without_zero_width_arrays(dtype: PolarsDataType) -> PolarsDataType:
+    # The plugin cannot receive zero-width arrays: polars-arrow 0.55 imports them with length 0.
+    if isinstance(dtype, pl.Array):
+        inner = _without_zero_width_arrays(dtype.inner)
+        return pl.List(inner) if dtype.size == 0 else pl.Array(inner, dtype.size)
+    if isinstance(dtype, pl.List):
+        return pl.List(_without_zero_width_arrays(dtype.inner))
+    if isinstance(dtype, pl.Struct):
+        return pl.Struct({f.name: _without_zero_width_arrays(f.dtype) for f in dtype.fields})
+    return dtype
+
+
 @pl.api.register_expr_namespace("sexp")
 class SexpNamespace:
     def __init__(self, expr: pl.Expr) -> None:
@@ -152,7 +164,10 @@ class SexpSeriesNamespace:
         return self._apply(get(pl.first(), key, *nested_keys))
 
     def encode(self) -> pl.Series:
-        return self._apply(encode(pl.first()))
+        dtype = self._series.dtype
+        readable = _without_zero_width_arrays(dtype)
+        series = self._series if readable == dtype else self._series.cast(readable)
+        return series.to_frame().select(encode(pl.first())).to_series()
 
     def infer_dtype(
         self, *, infer_schema_length: int | None = DEFAULT_INFER_SCHEMA_LENGTH
