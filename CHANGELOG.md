@@ -5,6 +5,7 @@
 - `decode` works through the column in batches of 16,384 rows, so memory stays flat instead of growing with the column. Decoding 1M records (64 MB of text) peaked at 35 MB instead of 1.17 GB, and ran about twice as fast.
 - `encode` of a struct whose fields are all null now decodes back to those nulls when the first field is a list. It used to come back as an empty list.
 - Inference reads a single atom as a one-item list only inside a record field. Rows like `a` and `(a b)` now infer `String` instead of `List(String)`, which strict decode rejected.
+- `s.sexp.encode()` and `decode` work with zero-width `pl.Array` columns, at any depth. Before, they crashed the plugin. The `pl.col(...).sexp.encode()` form still fails on them until the Polars Rust crate ships the upstream fix.
 - `Cargo.toml` pins pyo3 to 0.29.2, so a `cargo update` can't bring back the macOS segfault.
 
 ## 0.1.1 (2026-10-23)

@@ -189,3 +189,18 @@ def test_decode_spans_row_batches_and_strict_reports_a_late_row():
     bad = pl.concat([pl.Series(["1"] * rows), pl.Series(["(oops"])])
     with pytest.raises(pl.exceptions.ComputeError, match="oops"):
         bad.sexp.decode(pl.Int64, strict=True)
+
+
+def test_series_encode_handles_zero_width_arrays_at_any_depth():
+    empty = pl.Array(pl.Int8, 0)
+    df = pl.DataFrame(
+        {
+            "a": pl.Series([[], None], dtype=empty),
+            "s": pl.Series([{"e": [], "n": 1}, None], dtype=pl.Struct({"e": empty, "n": pl.Int8})),
+            "l": pl.Series([[[], None], None], dtype=pl.List(empty)),
+        }
+    )
+    assert df["a"].sexp.encode().to_list() == ["()", None]
+    assert df["s"].sexp.encode().to_list() == ["((e ()) (n 1))", None]
+    assert df["l"].sexp.encode().to_list() == ["(() ())", None]
+    assert df["a"].sexp.encode().sexp.decode(empty).to_list() == [[], None]

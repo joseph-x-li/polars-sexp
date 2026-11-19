@@ -87,6 +87,7 @@ impl DtypeSpec {
             DtypeSpec::Float32 => DataType::Float32,
             DtypeSpec::Float64 => DataType::Float64,
             DtypeSpec::List { inner } => DataType::List(Box::new(inner.dtype()?)),
+            DtypeSpec::Array { inner, width: 0 } => DataType::List(Box::new(inner.dtype()?)),
             DtypeSpec::Array { inner, width } => DataType::Array(Box::new(inner.dtype()?), *width),
             DtypeSpec::Struct { fields } => struct_dtype(fields)?,
             DtypeSpec::Tagged { variants } => {

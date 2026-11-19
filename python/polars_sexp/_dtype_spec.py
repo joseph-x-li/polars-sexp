@@ -40,6 +40,8 @@ def _is_text_then_cast(dtype: PolarsDataType) -> bool:
 def needs_polars_cast(dtype: PolarsDataType) -> bool:
     if _is_text_then_cast(dtype):
         return True
+    if isinstance(dtype, pl.Array) and dtype.size == 0:
+        return True
     if isinstance(dtype, (pl.List, pl.Array)):
         return needs_polars_cast(dtype.inner)
     if isinstance(dtype, pl.Struct):
