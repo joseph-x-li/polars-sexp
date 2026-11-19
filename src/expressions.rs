@@ -65,9 +65,39 @@ fn decode_output(input_fields: &[Field], kwargs: DecodeKwargs) -> PolarsResult<F
     ))
 }
 
+const DECODE_BATCH_ROWS: usize = 16_384;
+
 #[polars_expr(output_type_func_with_kwargs=decode_output)]
 fn sexp_decode(inputs: &[Series], kwargs: DecodeKwargs) -> PolarsResult<Series> {
     let ca = inputs[0].str()?;
+    let decoder = Decoder {
+        strict: kwargs.strict,
+    };
+    let mut out: Option<Series> = None;
+    for start in (0..ca.len()).step_by(DECODE_BATCH_ROWS) {
+        let batch = decode_batch(
+            &ca.slice(start as i64, DECODE_BATCH_ROWS),
+            &decoder,
+            &kwargs,
+        )?;
+        match out.as_mut() {
+            Some(out) => {
+                out.append_owned(batch)?;
+            }
+            None => out = Some(batch),
+        }
+    }
+    match out {
+        Some(out) => Ok(out.rechunk()),
+        None => decode_batch(ca, &decoder, &kwargs),
+    }
+}
+
+fn decode_batch(
+    ca: &StringChunked,
+    decoder: &Decoder,
+    kwargs: &DecodeKwargs,
+) -> PolarsResult<Series> {
     let parsed: Vec<Option<Sexp>> = if kwargs.strict {
         ca.iter()
             .map(|opt| opt.map(parse_or_explain).transpose())
@@ -76,9 +106,6 @@ fn sexp_decode(inputs: &[Series], kwargs: DecodeKwargs) -> PolarsResult<Series> 
         parse_each_or_null(ca).collect()
     };
     let vals: Vec<Option<Value>> = parsed.iter().map(|p| p.as_ref().map(Value::Node)).collect();
-    let decoder = Decoder {
-        strict: kwargs.strict,
-    };
     decoder.decode(ca.name().clone(), &vals, &kwargs.dtype)
 }
 

@@ -36,6 +36,7 @@ enum Writer {
     Struct {
         validity: BooleanChunked,
         fields: Vec<StructField>,
+        all_null_entry: String,
     },
 }
 
@@ -86,9 +87,8 @@ impl Writer {
                 }
             }
             DataType::Struct(_) => {
-                let fields = s
-                    .struct_()?
-                    .fields_as_series()
+                let field_series = s.struct_()?.fields_as_series();
+                let fields = field_series
                     .iter()
                     .map(|field| {
                         let mut opening = String::from("(");
@@ -102,6 +102,7 @@ impl Writer {
                     .collect::<PolarsResult<_>>()?;
                 Writer::Struct {
                     validity: s.is_not_null(),
+                    all_null_entry: all_null_entry(&field_series),
                     fields,
                 }
             }
@@ -189,15 +190,15 @@ impl Writer {
                 }
                 out.push(')');
             }
-            Writer::Struct { fields, .. } => {
+            Writer::Struct {
+                fields,
+                all_null_entry,
+                ..
+            } => {
                 out.push('(');
                 let mut present = fields.iter().filter(|f| !f.writer.is_null(row)).peekable();
                 if present.peek().is_none() {
-                    if let Some(first) = fields.first() {
-                        out.push_str(&first.opening);
-                        out.push_str(NIL);
-                        out.push(')');
-                    }
+                    out.push_str(all_null_entry);
                 }
                 for (i, field) in present.enumerate() {
                     if i > 0 {
@@ -211,6 +212,28 @@ impl Writer {
             }
         }
     }
+}
+
+fn all_null_entry(fields: &[Series]) -> String {
+    let reads_nil_as_null =
+        |dtype: &DataType| !matches!(dtype, DataType::List(_) | DataType::Array(..));
+    let key = match fields.iter().find(|f| reads_nil_as_null(f.dtype())) {
+        Some(field) => field.name().to_string(),
+        None if fields.is_empty() => return String::new(),
+        None => {
+            let mut key = String::from("_");
+            while fields.iter().any(|f| f.name().as_str() == key) {
+                key.push('_');
+            }
+            key
+        }
+    };
+    let mut entry = String::from("(");
+    push_atom(&mut entry, &key);
+    entry.push(' ');
+    entry.push_str(NIL);
+    entry.push(')');
+    entry
 }
 
 pub fn encode(s: &Series) -> PolarsResult<StringChunked> {

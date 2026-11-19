@@ -156,3 +156,36 @@ def test_first_of_repeated_keys_wins():
     dtype = pl.Struct({"a": pl.Int64, "b": pl.Int64})
     out = pl.select(pl.lit("((a 1) (b 2) (a 3))").sexp.decode(dtype)).item()
     assert out == {"a": 1, "b": 2}
+
+
+def test_encode_round_trips_a_struct_whose_fields_are_all_null():
+    dtype = pl.Struct({"tags": pl.List(pl.String), "n": pl.Int64})
+    only_lists = pl.Struct({"_": pl.List(pl.String), "pair": pl.Array(pl.Int8, 2)})
+    df = pl.DataFrame(
+        {
+            "x": pl.Series([{"tags": None, "n": None}, None], dtype=dtype),
+            "y": pl.Series([{"_": None, "pair": None}, None], dtype=only_lists),
+        }
+    )
+    encoded = df.select(pl.all().sexp.encode())
+    decoded = encoded.select(pl.col("x").sexp.decode(dtype), pl.col("y").sexp.decode(only_lists))
+    assert decoded.equals(df)
+
+
+def test_inferred_dtype_decodes_every_sampled_row_under_strict():
+    rows = pl.Series(["a", "(a b)", "((x) y)"])
+    assert rows.sexp.infer_dtype() == pl.String
+    assert rows.sexp.decode(strict=True).to_list() == ["a", "(a b)", "((x) y)"]
+
+
+def test_decode_spans_row_batches_and_strict_reports_a_late_row():
+    rows = 40_000
+    s = pl.Series([f"((n {i}) (tags {i} x))" if i % 3 else None for i in range(rows)])
+    out = s.sexp.decode(pl.Struct({"n": pl.Int64, "tags": pl.List(pl.String)}))
+    assert out.n_chunks() == 1
+    assert out.to_list() == [
+        {"n": i, "tags": [str(i), "x"]} if i % 3 else None for i in range(rows)
+    ]
+    bad = pl.concat([pl.Series(["1"] * rows), pl.Series(["(oops"])])
+    with pytest.raises(pl.exceptions.ComputeError, match="oops"):
+        bad.sexp.decode(pl.Int64, strict=True)
